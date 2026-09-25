@@ -13,24 +13,39 @@ class HaIotFloorplan extends HTMLElement {
 
     this._loaded = false;
     this._loading = false;
-
     this._editMode = false;
 
     this._dragState = null;
     this._resizeState = null;
 
+    this._activeGroup = null;
+    this._areaManagerOpen = false;
+
     this._lastRender = 0;
 
-    this._layoutStorageKey =
+    /*
+     * v0.4 state:
+     *
+     * floors
+     * area -> floor assignments
+     * separate room geometry per floor
+     */
+    this._stateKey =
+      "ha_iot_floorplan_state_v04";
+
+    this._legacyLayoutKey =
       "ha_iot_floorplan_layout_v02";
 
-    this._layout =
-      this._loadLayout();
+    this._state =
+      this._loadState();
 
-    this._uploadedBackgroundUrl = null;
-    this._uploadedBackgroundBlob = null;
+    /*
+     * Images are stored in IndexedDB.
+     * One image per floor.
+     */
+    this._backgroundUrls = {};
+    this._backgroundBlobs = {};
 
-    this._activeGroup = null;
     this._currentData = null;
   }
 
@@ -55,10 +70,15 @@ class HaIotFloorplan extends HTMLElement {
       return;
     }
 
+    /*
+     * Don't rebuild while user is editing
+     * or has a popup open.
+     */
     if (
       !this._loaded ||
       this._editMode ||
-      this._activeGroup
+      this._activeGroup ||
+      this._areaManagerOpen
     ) {
       return;
     }
@@ -87,9 +107,13 @@ class HaIotFloorplan extends HTMLElement {
 
     try {
 
-      await this._core.reloadRegistries();
+      await this._core
+        .reloadRegistries();
 
-      await this._loadUploadedBackground();
+      this._ensureFloorState();
+
+      await this
+        ._loadAllBackgrounds();
 
       this._loaded = true;
       this._loading = false;
@@ -117,13 +141,16 @@ class HaIotFloorplan extends HTMLElement {
               color:var(--error-color);
             "
           >
+
             Initialization failed.
+
             <br><br>
 
             ${this._escapeHtml(
               err?.message ||
               String(err)
             )}
+
           </div>
 
         </ha-card>
@@ -133,9 +160,478 @@ class HaIotFloorplan extends HTMLElement {
 
 
   /*
-   * -------------------------------------------------
-   * BACKGROUND IMAGE STORAGE
-   * -------------------------------------------------
+   * =================================================
+   * FLOOR STATE
+   * =================================================
+   */
+
+
+  _defaultState() {
+
+    /*
+     * Migrate old v0.2/v0.3 room geometry
+     * to the new Ground floor.
+     */
+
+    let legacyLayout = {};
+
+    try {
+
+      legacyLayout =
+        JSON.parse(
+          localStorage.getItem(
+            this._legacyLayoutKey
+          ) || "{}"
+        );
+
+    } catch {
+
+      legacyLayout = {};
+    }
+
+
+    return {
+
+      version: 4,
+
+      initialized: false,
+
+      activeFloorId:
+        "ground",
+
+      floors: [
+
+        {
+          id:
+            "ground",
+
+          name:
+            "Ground floor",
+
+          areaIds:
+            [],
+
+          layout:
+            legacyLayout || {}
+        }
+
+      ]
+    };
+  }
+
+
+  _loadState() {
+
+    try {
+
+      const raw =
+        localStorage.getItem(
+          this._stateKey
+        );
+
+      if (raw) {
+
+        const state =
+          JSON.parse(
+            raw
+          );
+
+        if (
+          state &&
+          Array.isArray(
+            state.floors
+          ) &&
+          state.floors.length
+        ) {
+
+          /*
+           * Repair missing optional fields.
+           */
+
+          for (
+            const floor
+            of state.floors
+          ) {
+
+            floor.areaIds =
+              Array.isArray(
+                floor.areaIds
+              )
+                ? floor.areaIds
+                : [];
+
+
+            floor.layout =
+              floor.layout &&
+              typeof floor.layout ===
+              "object"
+                ? floor.layout
+                : {};
+          }
+
+          return state;
+        }
+      }
+
+    } catch (err) {
+
+      console.warn(
+        "HA IoT Floorplan state load failed",
+        err
+      );
+    }
+
+
+    return this._defaultState();
+  }
+
+
+  _saveState() {
+
+    localStorage.setItem(
+      this._stateKey,
+      JSON.stringify(
+        this._state
+      )
+    );
+  }
+
+
+  _ensureFloorState() {
+
+    if (
+      !this._state.floors?.length
+    ) {
+      this._state =
+        this._defaultState();
+    }
+
+
+    /*
+     * If selected floor disappeared,
+     * select first remaining one.
+     */
+
+    if (
+      !this._state.floors.some(
+        floor =>
+          floor.id ===
+          this._state.activeFloorId
+      )
+    ) {
+
+      this._state.activeFloorId =
+        this._state
+          .floors[0]
+          .id;
+    }
+
+
+    /*
+     * First v0.4 run:
+     *
+     * preserve current result by assigning
+     * every existing HA Area to Ground floor.
+     *
+     * After this migration NEW Areas won't
+     * be assigned automatically.
+     */
+
+    if (
+      !this._state.initialized
+    ) {
+
+      const ground =
+        this._state.floors.find(
+          floor =>
+            floor.id ===
+            "ground"
+        ) ||
+        this._state.floors[0];
+
+
+      ground.areaIds =
+        [
+          ...new Set(
+            this._core.areas.map(
+              area =>
+                area.area_id
+            )
+          )
+        ];
+
+
+      this._state.initialized =
+        true;
+
+
+      this._saveState();
+    }
+  }
+
+
+  _activeFloor() {
+
+    return (
+      this._state.floors.find(
+        floor =>
+          floor.id ===
+          this._state.activeFloorId
+      ) ||
+      this._state.floors[0]
+    );
+  }
+
+
+  _floorForArea(
+    areaId
+  ) {
+
+    return (
+      this._state.floors.find(
+        floor =>
+          floor.areaIds.includes(
+            areaId
+          )
+      ) ||
+      null
+    );
+  }
+
+
+  _switchFloor(
+    floorId
+  ) {
+
+    if (
+      !this._state.floors.some(
+        floor =>
+          floor.id ===
+          floorId
+      )
+    ) {
+      return;
+    }
+
+
+    this._state.activeFloorId =
+      floorId;
+
+    this._activeGroup =
+      null;
+
+    this._areaManagerOpen =
+      false;
+
+
+    this._saveState();
+
+    this._render();
+  }
+
+
+  _addFloor() {
+
+    const name =
+      prompt(
+        "Name for the new floor:",
+        "Basement"
+      );
+
+
+    if (
+      !name?.trim()
+    ) {
+      return;
+    }
+
+
+    const id =
+      "floor_" +
+      Date.now()
+        .toString(36);
+
+
+    this._state.floors.push({
+
+      id,
+
+      name:
+        name.trim(),
+
+      areaIds:
+        [],
+
+      layout:
+        {}
+
+    });
+
+
+    this._state.activeFloorId =
+      id;
+
+
+    this._saveState();
+
+    this._render();
+  }
+
+
+  _renameFloor() {
+
+    const floor =
+      this._activeFloor();
+
+
+    if (!floor) {
+      return;
+    }
+
+
+    const name =
+      prompt(
+        "Floor name:",
+        floor.name
+      );
+
+
+    if (
+      !name?.trim()
+    ) {
+      return;
+    }
+
+
+    floor.name =
+      name.trim();
+
+
+    this._saveState();
+
+    this._render();
+  }
+
+
+  async _deleteFloor() {
+
+    if (
+      this._state.floors.length <=
+      1
+    ) {
+
+      alert(
+        "At least one floor must remain."
+      );
+
+      return;
+    }
+
+
+    const floor =
+      this._activeFloor();
+
+
+    if (!floor) {
+      return;
+    }
+
+
+    if (
+      !confirm(
+        `Delete floor "${floor.name}"?\n\nIts Areas will become Unassigned.`
+      )
+    ) {
+      return;
+    }
+
+
+    await this
+      ._deleteBackgroundForFloor(
+        floor.id
+      );
+
+
+    this._state.floors =
+      this._state.floors.filter(
+        item =>
+          item.id !==
+          floor.id
+      );
+
+
+    this._state.activeFloorId =
+      this._state
+        .floors[0]
+        .id;
+
+
+    this._saveState();
+
+    this._render();
+  }
+
+
+  _assignAreaToFloor(
+    areaId,
+    floorId
+  ) {
+
+    /*
+     * Remove Area from every floor first.
+     */
+
+    for (
+      const floor
+      of this._state.floors
+    ) {
+
+      floor.areaIds =
+        floor.areaIds.filter(
+          id =>
+            id !==
+            areaId
+        );
+    }
+
+
+    /*
+     * Empty floorId = unassigned.
+     */
+
+    if (floorId) {
+
+      const floor =
+        this._state.floors.find(
+          item =>
+            item.id ===
+            floorId
+        );
+
+
+      if (floor) {
+
+        floor.areaIds.push(
+          areaId
+        );
+      }
+    }
+
+
+    this._saveState();
+
+    /*
+     * Keep area manager open.
+     */
+
+    this._render();
+  }
+
+
+  /*
+   * =================================================
+   * BACKGROUND DATABASE
+   * =================================================
    */
 
 
@@ -160,11 +656,14 @@ class HaIotFloorplan extends HTMLElement {
             const db =
               event.target.result;
 
+
             if (
-              !db.objectStoreNames.contains(
-                "settings"
-              )
+              !db.objectStoreNames
+                .contains(
+                  "settings"
+                )
             ) {
+
               db.createObjectStore(
                 "settings"
               );
@@ -189,97 +688,69 @@ class HaIotFloorplan extends HTMLElement {
   }
 
 
-  async _loadUploadedBackground() {
+  _backgroundKey(
+    floorId
+  ) {
 
-    try {
-
-      const db =
-        await this._openBackgroundDb();
-
-
-      const blob =
-        await new Promise(
-          (
-            resolve,
-            reject
-          ) => {
-
-            const tx =
-              db.transaction(
-                "settings",
-                "readonly"
-              );
-
-            const store =
-              tx.objectStore(
-                "settings"
-              );
-
-            const request =
-              store.get(
-                "background"
-              );
-
-
-            request.onsuccess =
-              () =>
-                resolve(
-                  request.result ||
-                  null
-                );
-
-
-            request.onerror =
-              () =>
-                reject(
-                  request.error
-                );
-          }
-        );
-
-
-      db.close();
-
-
-      if (blob) {
-
-        this._uploadedBackgroundBlob =
-          blob;
-
-        if (
-          this._uploadedBackgroundUrl
-        ) {
-          URL.revokeObjectURL(
-            this._uploadedBackgroundUrl
-          );
-        }
-
-
-        this._uploadedBackgroundUrl =
-          URL.createObjectURL(
-            blob
-          );
-      }
-
-    } catch (err) {
-
-      console.warn(
-        "HA IoT Floorplan: background load failed",
-        err
-      );
-    }
+    return (
+      `background:${floorId}`
+    );
   }
 
 
-  async _saveUploadedBackground(
-    file
+  _dbGet(
+    db,
+    key
   ) {
 
-    const db =
-      await this._openBackgroundDb();
+    return new Promise(
+      (
+        resolve,
+        reject
+      ) => {
+
+        const tx =
+          db.transaction(
+            "settings",
+            "readonly"
+          );
 
 
-    await new Promise(
+        const request =
+          tx
+            .objectStore(
+              "settings"
+            )
+            .get(
+              key
+            );
+
+
+        request.onsuccess =
+          () =>
+            resolve(
+              request.result ||
+              null
+            );
+
+
+        request.onerror =
+          () =>
+            reject(
+              request.error
+            );
+      }
+    );
+  }
+
+
+  _dbPut(
+    db,
+    key,
+    value
+  ) {
+
+    return new Promise(
       (
         resolve,
         reject
@@ -291,16 +762,15 @@ class HaIotFloorplan extends HTMLElement {
             "readwrite"
           );
 
-        const store =
-          tx.objectStore(
+
+        tx
+          .objectStore(
             "settings"
+          )
+          .put(
+            value,
+            key
           );
-
-
-        store.put(
-          file,
-          "background"
-        );
 
 
         tx.oncomplete =
@@ -315,27 +785,279 @@ class HaIotFloorplan extends HTMLElement {
             );
       }
     );
+  }
+
+
+  _dbDelete(
+    db,
+    key
+  ) {
+
+    return new Promise(
+      (
+        resolve,
+        reject
+      ) => {
+
+        const tx =
+          db.transaction(
+            "settings",
+            "readwrite"
+          );
+
+
+        tx
+          .objectStore(
+            "settings"
+          )
+          .delete(
+            key
+          );
+
+
+        tx.oncomplete =
+          () =>
+            resolve();
+
+
+        tx.onerror =
+          () =>
+            reject(
+              tx.error
+            );
+      }
+    );
+  }
+
+
+  _setBackgroundObjectUrl(
+    floorId,
+    blob
+  ) {
+
+    if (
+      this._backgroundUrls[
+        floorId
+      ]
+    ) {
+
+      URL.revokeObjectURL(
+        this._backgroundUrls[
+          floorId
+        ]
+      );
+    }
+
+
+    this._backgroundBlobs[
+      floorId
+    ] =
+      blob;
+
+
+    this._backgroundUrls[
+      floorId
+    ] =
+      URL.createObjectURL(
+        blob
+      );
+  }
+
+
+  async _loadAllBackgrounds() {
+
+    const db =
+      await this
+        ._openBackgroundDb();
+
+
+    /*
+     * v0.3 migration:
+     *
+     * old key "background"
+     * becomes Ground floor image.
+     */
+
+    const groundKey =
+      this._backgroundKey(
+        "ground"
+      );
+
+
+    const groundImage =
+      await this._dbGet(
+        db,
+        groundKey
+      );
+
+
+    if (!groundImage) {
+
+      const legacy =
+        await this._dbGet(
+          db,
+          "background"
+        );
+
+
+      if (legacy) {
+
+        await this._dbPut(
+          db,
+          groundKey,
+          legacy
+        );
+
+
+        await this._dbDelete(
+          db,
+          "background"
+        );
+      }
+    }
+
+
+    for (
+      const floor
+      of this._state.floors
+    ) {
+
+      const blob =
+        await this._dbGet(
+          db,
+          this._backgroundKey(
+            floor.id
+          )
+        );
+
+
+      if (blob) {
+
+        this._setBackgroundObjectUrl(
+          floor.id,
+          blob
+        );
+      }
+    }
+
+
+    db.close();
+  }
+
+
+  async _saveUploadedBackground(
+    file
+  ) {
+
+    const floor =
+      this._activeFloor();
+
+
+    if (!floor) {
+      return;
+    }
+
+
+    const db =
+      await this
+        ._openBackgroundDb();
+
+
+    await this._dbPut(
+
+      db,
+
+      this._backgroundKey(
+        floor.id
+      ),
+
+      file
+    );
 
 
     db.close();
 
 
-    this._uploadedBackgroundBlob =
-      file;
+    this._setBackgroundObjectUrl(
+      floor.id,
+      file
+    );
 
 
-    if (
-      this._uploadedBackgroundUrl
-    ) {
-      URL.revokeObjectURL(
-        this._uploadedBackgroundUrl
+    this._render();
+  }
+
+
+  async _deleteBackgroundForFloor(
+    floorId
+  ) {
+
+    try {
+
+      const db =
+        await this
+          ._openBackgroundDb();
+
+
+      await this._dbDelete(
+
+        db,
+
+        this._backgroundKey(
+          floorId
+        )
+      );
+
+
+      db.close();
+
+    } catch (err) {
+
+      console.warn(
+        "Background delete failed",
+        err
       );
     }
 
 
-    this._uploadedBackgroundUrl =
-      URL.createObjectURL(
-        file
+    if (
+      this._backgroundUrls[
+        floorId
+      ]
+    ) {
+
+      URL.revokeObjectURL(
+        this._backgroundUrls[
+          floorId
+        ]
+      );
+    }
+
+
+    delete this._backgroundUrls[
+      floorId
+    ];
+
+    delete this._backgroundBlobs[
+      floorId
+    ];
+  }
+
+
+  async _removeUploadedBackground() {
+
+    const floor =
+      this._activeFloor();
+
+
+    if (!floor) {
+      return;
+    }
+
+
+    await this
+      ._deleteBackgroundForFloor(
+        floor.id
       );
 
 
@@ -343,158 +1065,48 @@ class HaIotFloorplan extends HTMLElement {
   }
 
 
-  async _removeUploadedBackground() {
-
-    try {
-
-      const db =
-        await this._openBackgroundDb();
-
-
-      await new Promise(
-        (
-          resolve,
-          reject
-        ) => {
-
-          const tx =
-            db.transaction(
-              "settings",
-              "readwrite"
-            );
-
-          tx.objectStore(
-            "settings"
-          ).delete(
-            "background"
-          );
-
-
-          tx.oncomplete =
-            () =>
-              resolve();
-
-
-          tx.onerror =
-            () =>
-              reject(
-                tx.error
-              );
-        }
-      );
-
-
-      db.close();
-
-
-      if (
-        this._uploadedBackgroundUrl
-      ) {
-        URL.revokeObjectURL(
-          this._uploadedBackgroundUrl
-        );
-      }
-
-
-      this._uploadedBackgroundUrl =
-        null;
-
-      this._uploadedBackgroundBlob =
-        null;
-
-
-      this._render();
-
-    } catch (err) {
-
-      console.error(
-        "Could not remove uploaded floorplan",
-        err
-      );
-    }
-  }
-
-
   _getBackground() {
 
+    const floor =
+      this._activeFloor();
+
+
+    if (!floor) {
+      return null;
+    }
+
+
     return (
-      this._uploadedBackgroundUrl ||
-      this._config.background ||
+
+      this._backgroundUrls[
+        floor.id
+      ]
+
+      ||
+
+      /*
+       * Legacy YAML background only applies
+       * to Ground floor.
+       */
+
+      (
+        floor.id ===
+        "ground"
+          ? this._config.background
+          : null
+      )
+
+      ||
+
       null
     );
   }
 
 
   /*
-   * -------------------------------------------------
-   * LAYOUT STORAGE
-   * -------------------------------------------------
-   */
-
-
-  _loadLayout() {
-
-    try {
-
-      const raw =
-        localStorage.getItem(
-          this._layoutStorageKey
-        );
-
-      if (!raw) {
-        return {};
-      }
-
-      const parsed =
-        JSON.parse(
-          raw
-        );
-
-      if (
-        parsed &&
-        typeof parsed ===
-        "object"
-      ) {
-        return parsed;
-      }
-
-    } catch (err) {
-
-      console.warn(
-        "HA IoT Floorplan: layout load failed",
-        err
-      );
-    }
-
-    return {};
-  }
-
-
-  _saveLayout() {
-
-    try {
-
-      localStorage.setItem(
-        this._layoutStorageKey,
-        JSON.stringify(
-          this._layout
-        )
-      );
-
-    } catch (err) {
-
-      console.warn(
-        "HA IoT Floorplan: layout save failed",
-        err
-      );
-    }
-  }
-
-
-  /*
-   * -------------------------------------------------
-   * DATA
-   * -------------------------------------------------
+   * =================================================
+   * INVENTORY
+   * =================================================
    */
 
 
@@ -504,7 +1116,18 @@ class HaIotFloorplan extends HTMLElement {
       this._core.getSnapshot();
 
 
-    const byArea =
+    const floor =
+      this._activeFloor();
+
+
+    const floorAreaIds =
+      new Set(
+        floor?.areaIds ||
+        []
+      );
+
+
+    const devicesByArea =
       new Map();
 
 
@@ -530,60 +1153,80 @@ class HaIotFloorplan extends HTMLElement {
 
       if (
         !device.areaId ||
-        !device.areaName
+        !floorAreaIds.has(
+          device.areaId
+        )
       ) {
         continue;
       }
 
 
       if (
-        !byArea.has(
+        !devicesByArea.has(
           device.areaId
         )
       ) {
 
-        byArea.set(
+        devicesByArea.set(
           device.areaId,
-          {
-            areaId:
-              device.areaId,
-
-            areaName:
-              device.areaName,
-
-            devices:
-              []
-          }
+          []
         );
       }
 
 
-      byArea
+      devicesByArea
         .get(
           device.areaId
         )
-        .devices
         .push(
           device
         );
     }
 
 
+    /*
+     * We intentionally include HA Areas
+     * with ZERO devices as well.
+     *
+     * They still represent rooms.
+     */
+
     const areas =
-      [
-        ...byArea.values()
-      ];
+      this._core.areas
 
-
-    areas.sort(
-      (
-        a,
-        b
-      ) =>
-        a.areaName.localeCompare(
-          b.areaName
+        .filter(
+          area =>
+            floorAreaIds.has(
+              area.area_id
+            )
         )
-    );
+
+        .map(
+          area => ({
+
+            areaId:
+              area.area_id,
+
+            areaName:
+              area.name,
+
+            devices:
+              devicesByArea.get(
+                area.area_id
+              ) || []
+
+          })
+        )
+
+        .sort(
+          (
+            a,
+            b
+          ) =>
+            a.areaName.localeCompare(
+              b.areaName
+            )
+        );
 
 
     for (
@@ -604,6 +1247,9 @@ class HaIotFloorplan extends HTMLElement {
 
 
     return {
+
+      floor,
+
       areas,
 
       floating:
@@ -616,9 +1262,9 @@ class HaIotFloorplan extends HTMLElement {
 
 
   /*
-   * -------------------------------------------------
-   * HYBRID DEVICE GROUPING
-   * -------------------------------------------------
+   * =================================================
+   * HYBRID GROUPING
+   * =================================================
    */
 
 
@@ -647,6 +1293,7 @@ class HaIotFloorplan extends HTMLElement {
           category
         )
       ) {
+
         groups.set(
           category,
           []
@@ -676,20 +1323,13 @@ class HaIotFloorplan extends HTMLElement {
       of groups.entries()
     ) {
 
-      /*
-       * HYBRID:
-       *
-       * one item = show actual device
-       *
-       * multiple items = show category group
-       */
-
       if (
         devices.length ===
         1
       ) {
 
         result.push({
+
           type:
             "device",
 
@@ -697,26 +1337,24 @@ class HaIotFloorplan extends HTMLElement {
 
           device:
             devices[0]
+
         });
 
       } else {
 
         result.push({
+
           type:
             "group",
 
           category,
 
           devices
+
         });
       }
     }
 
-
-    /*
-     * Bigger groups first, then
-     * single devices.
-     */
 
     result.sort(
       (
@@ -724,39 +1362,23 @@ class HaIotFloorplan extends HTMLElement {
         b
       ) => {
 
-        const aCount =
-          a.type === "group"
+        const ac =
+          a.type ===
+          "group"
             ? a.devices.length
             : 1;
 
-        const bCount =
-          b.type === "group"
+
+        const bc =
+          b.type ===
+          "group"
             ? b.devices.length
             : 1;
 
 
-        if (
-          bCount !==
-          aCount
-        ) {
-          return (
-            bCount -
-            aCount
-          );
-        }
-
-
         return (
-          this._core
-            .categoryTitle(
-              a.category
-            )
-            .localeCompare(
-              this._core
-                .categoryTitle(
-                  b.category
-                )
-            )
+          bc -
+          ac
         );
       }
     );
@@ -767,9 +1389,9 @@ class HaIotFloorplan extends HTMLElement {
 
 
   /*
-   * -------------------------------------------------
-   * DEFAULT ROOM POSITIONS
-   * -------------------------------------------------
+   * =================================================
+   * ROOM GEOMETRY
+   * =================================================
    */
 
 
@@ -777,10 +1399,24 @@ class HaIotFloorplan extends HTMLElement {
     areas
   ) {
 
+    const floor =
+      this._activeFloor();
+
+
+    if (!floor) {
+      return;
+    }
+
+
+    floor.layout =
+      floor.layout ||
+      {};
+
+
     const missing =
       areas.filter(
         area =>
-          !this._layout[
+          !floor.layout[
             area.areaId
           ]
       );
@@ -794,7 +1430,10 @@ class HaIotFloorplan extends HTMLElement {
 
 
     const count =
-      areas.length;
+      Math.max(
+        areas.length,
+        1
+      );
 
 
     const cols =
@@ -810,9 +1449,12 @@ class HaIotFloorplan extends HTMLElement {
 
 
     const rows =
-      Math.ceil(
-        count /
-        cols
+      Math.max(
+        1,
+        Math.ceil(
+          count /
+          cols
+        )
       );
 
 
@@ -854,7 +1496,7 @@ class HaIotFloorplan extends HTMLElement {
       ) => {
 
         if (
-          this._layout[
+          floor.layout[
             area.areaId
           ]
         ) {
@@ -874,7 +1516,7 @@ class HaIotFloorplan extends HTMLElement {
           );
 
 
-        this._layout[
+        floor.layout[
           area.areaId
         ] = {
 
@@ -905,14 +1547,54 @@ class HaIotFloorplan extends HTMLElement {
     );
 
 
-    this._saveLayout();
+    this._saveState();
+  }
+
+
+  _toggleEditMode() {
+
+    this._editMode =
+      !this._editMode;
+
+
+    this._render();
+  }
+
+
+  _resetLayout() {
+
+    const floor =
+      this._activeFloor();
+
+
+    if (!floor) {
+      return;
+    }
+
+
+    if (
+      !confirm(
+        `Reset room positions for "${floor.name}"?`
+      )
+    ) {
+      return;
+    }
+
+
+    floor.layout =
+      {};
+
+
+    this._saveState();
+
+    this._render();
   }
 
 
   /*
-   * -------------------------------------------------
-   * MAIN RENDER
-   * -------------------------------------------------
+   * =================================================
+   * MAIN UI
+   * =================================================
    */
 
 
@@ -942,17 +1624,13 @@ class HaIotFloorplan extends HTMLElement {
       this._getBackground();
 
 
-    const noBackgroundStyle =
-      background
-        ? ""
-        : `
-          aspect-ratio:
-            ${
-              this._config
-                .aspect_ratio ||
-              "16 / 9"
-            };
-        `;
+    const unassignedCount =
+      this._core.areas.filter(
+        area =>
+          !this._floorForArea(
+            area.area_id
+          )
+      ).length;
 
 
     this.innerHTML = `
@@ -961,61 +1639,44 @@ class HaIotFloorplan extends HTMLElement {
         <style>
 
           .wrap {
-            padding:
-              18px;
+            padding:18px;
           }
 
 
           .header {
             display:flex;
-
-            justify-content:
-              space-between;
-
-            align-items:
-              center;
-
-            gap:
-              14px;
-
-            margin-bottom:
-              14px;
+            justify-content:space-between;
+            align-items:center;
+            gap:14px;
+            margin-bottom:12px;
           }
 
 
           .title {
-            font-size:
-              24px;
-
-            font-weight:
-              500;
+            font-size:24px;
+            font-weight:500;
           }
 
 
           .subtitle {
-            font-size:
-              12px;
-
-            opacity:
-              .6;
-
-            margin-top:
-              2px;
+            font-size:12px;
+            opacity:.6;
           }
 
 
-          .controls {
+          .controls,
+          .floor-tabs,
+          .floor-tools {
             display:flex;
-
-            gap:
-              8px;
-
-            flex-wrap:
-              wrap;
+            gap:7px;
+            flex-wrap:wrap;
+            align-items:center;
           }
 
 
-          .button {
+          .button,
+          .floor-tab {
+
             border:
               1px solid
               var(
@@ -1033,38 +1694,57 @@ class HaIotFloorplan extends HTMLElement {
               );
 
             padding:
-              8px 12px;
+              7px 11px;
 
             border-radius:
               8px;
 
-            cursor:
-              pointer;
+            cursor:pointer;
           }
 
 
-          .button.active {
+          .floor-tabs {
+            margin-bottom:
+              12px;
+          }
+
+
+          .floor-tab {
+            border-radius:
+              999px;
+
+            font-size:
+              12px;
+          }
+
+
+          .floor-tab.active {
             border-color:
-              var(
-                --primary-color
-              );
+              #00a8ff;
 
             color:
-              var(
-                --primary-color
+              #00a8ff;
+
+            background:
+              rgba(
+                0,
+                168,
+                255,
+                .13
               );
           }
 
 
-          .floorplan {
-            position:
-              relative;
+          .add-floor {
 
             width:
-              100%;
+              31px;
 
-            overflow:
-              hidden;
+            height:
+              31px;
+
+            border-radius:
+              50%;
 
             border:
               1px solid
@@ -1072,479 +1752,43 @@ class HaIotFloorplan extends HTMLElement {
                 --divider-color
               );
 
-            border-radius:
-              12px;
-
             background:
-              #05090f;
-
-            ${noBackgroundStyle}
-          }
-
-
-          .floorplan-image {
-            display:block;
-
-            width:
-              100%;
-
-            height:
-              auto;
-
-            user-select:
-              none;
-
-            pointer-events:
-              none;
-          }
-
-
-          .blank-floorplan {
-
-            background-image:
-
-              linear-gradient(
-                to right,
-                rgba(
-                  127,
-                  127,
-                  127,
-                  .08
-                )
-                1px,
-                transparent
-                1px
-              ),
-
-              linear-gradient(
-                to bottom,
-                rgba(
-                  127,
-                  127,
-                  127,
-                  .08
-                )
-                1px,
-                transparent
-                1px
+              var(
+                --secondary-background-color
               );
 
-            background-size:
-              40px 40px;
-          }
-
-
-          .area-layer {
-            position:absolute;
-            inset:0;
-          }
-
-
-          .area {
-            position:absolute;
-
-            box-sizing:
-              border-box;
-
-            overflow:hidden;
-
-            border-radius:
-              10px;
-
-            border:
-              1px solid
-              rgba(
-                255,
-                255,
-                255,
-                .16
+            color:
+              var(
+                --primary-text-color
               );
 
-            background:
-              rgba(
-                10,
-                17,
-                27,
-                .52
-              );
-          }
-
-
-          .edit-mode
-          .area {
-
-            border:
-              2px dashed
-              #00a8ff;
-
-            background:
-              rgba(
-                0,
-                140,
-                255,
-                .10
-              );
-          }
-
-
-          .area-header {
-
-            height:
-              30px;
-
-            box-sizing:
-              border-box;
-
-            display:flex;
-
-            align-items:center;
-
-            justify-content:
-              space-between;
-
-            gap:
-              6px;
-
-            padding:
-              5px 8px;
-
-            font-size:
-              12px;
-
-            font-weight:
-              600;
-
-            background:
-              rgba(
-                4,
-                10,
-                18,
-                .74
-              );
-
-            white-space:
-              nowrap;
-
-            overflow:
-              hidden;
-          }
-
-
-          .edit-mode
-          .area-header {
-            cursor:move;
-            touch-action:none;
-          }
-
-
-          .area-count {
-            font-size:
-              10px;
-
-            opacity:
-              .55;
-
-            font-weight:
-              400;
-          }
-
-
-          .devices {
-
-            display:grid;
-
-            grid-template-columns:
-              repeat(
-                auto-fill,
-                minmax(
-                  76px,
-                  1fr
-                )
-              );
-
-            gap:
-              5px;
-
-            padding:
-              6px;
-
-            overflow:auto;
-
-            max-height:
-              calc(
-                100% -
-                30px
-              );
-
-            box-sizing:
-              border-box;
-          }
-
-
-          /*
-           * DEVICE TILE + GROUP TILE
-           */
-
-          .room-item {
-
-            position:
-              relative;
-
-            min-height:
-              64px;
-
-            border-radius:
-              8px;
-
-            border:
-              1px solid
-              rgba(
-                255,
-                255,
-                255,
-                .08
-              );
-
-            background:
-              rgba(
-                8,
-                14,
-                22,
-                .82
-              );
-
-            display:flex;
-
-            flex-direction:
-              column;
-
-            align-items:
-              center;
-
-            justify-content:
-              center;
-
-            gap:
-              3px;
-
-            padding:
-              5px;
-
-            box-sizing:
-              border-box;
-
-            text-align:
-              center;
-          }
-
-
-          .group-item {
             cursor:pointer;
 
-            border-color:
-              rgba(
-                0,
-                168,
-                255,
-                .32
-              );
-          }
-
-
-          .group-item:hover {
-
-            background:
-              rgba(
-                0,
-                120,
-                210,
-                .20
-              );
-
-            border-color:
-              #00a8ff;
-          }
-
-
-          .room-item
-          ha-icon {
-
-            --mdc-icon-size:
-              21px;
-          }
-
-
-          .item-name {
-
-            width:
-              100%;
-
             font-size:
-              10px;
-
-            line-height:
-              1.15;
-
-            font-weight:
-              600;
-
-            overflow:hidden;
-
-            text-overflow:
-              ellipsis;
-
-            display:
-              -webkit-box;
-
-            -webkit-line-clamp:
-              2;
-
-            -webkit-box-orient:
-              vertical;
+              18px;
           }
 
 
-          .item-category {
-
-            font-size:
-              8px;
-
-            opacity:
-              .5;
+          .floor-tools {
+            margin-left:auto;
           }
 
 
-          .group-count {
-
-            position:absolute;
-
-            top:
-              4px;
-
-            right:
-              5px;
-
-            min-width:
-              17px;
-
-            height:
-              17px;
-
-            padding:
-              0 4px;
-
-            box-sizing:
-              border-box;
-
-            display:flex;
-
-            align-items:center;
-
-            justify-content:center;
-
-            border-radius:
-              999px;
-
-            background:
+          .button.active {
+            border-color:
               #00a8ff;
 
             color:
-              #fff;
-
-            font-size:
-              9px;
-
-            font-weight:
-              700;
-          }
-
-
-          .status {
-
-            position:absolute;
-
-            top:
-              5px;
-
-            right:
-              5px;
-
-            width:
-              7px;
-
-            height:
-              7px;
-
-            border-radius:
-              50%;
-          }
-
-
-          .online {
-            background:
-              var(
-                --success-color,
-                #4caf50
-              );
-          }
-
-
-          .offline {
-            background:
-              var(
-                --disabled-text-color
-              );
-          }
-
-
-          /*
-           * Resize
-           */
-
-          .resize-handle {
-
-            display:none;
-
-            position:absolute;
-
-            width:18px;
-            height:18px;
-
-            right:0;
-            bottom:0;
-
-            cursor:
-              nwse-resize;
-
-            touch-action:none;
-          }
-
-
-          .edit-mode
-          .resize-handle {
-            display:block;
-          }
-
-
-          .resize-handle::after {
-
-            content:"";
-
-            position:absolute;
-
-            right:4px;
-            bottom:4px;
-
-            width:8px;
-            height:8px;
-
-            border-right:
-              2px solid
               #00a8ff;
+          }
 
-            border-bottom:
-              2px solid
-              #00a8ff;
+
+          .danger {
+            border-color:
+              var(
+                --error-color,
+                #f44336
+              );
           }
 
 
@@ -1573,27 +1817,464 @@ class HaIotFloorplan extends HTMLElement {
 
 
           /*
-           * Floating devices
+           * PLAN
+           */
+
+          .floorplan {
+
+            position:
+              relative;
+
+            width:
+              100%;
+
+            overflow:
+              hidden;
+
+            border:
+              1px solid
+              var(
+                --divider-color
+              );
+
+            border-radius:
+              12px;
+
+            background:
+              #05090f;
+
+            ${
+              background
+                ? ""
+                : `
+                  aspect-ratio:
+                    ${
+                      this._config
+                        .aspect_ratio ||
+                      "16 / 9"
+                    };
+                `
+            }
+          }
+
+
+          .floorplan-image {
+
+            display:block;
+
+            width:100%;
+
+            height:auto;
+
+            pointer-events:none;
+
+            user-select:none;
+          }
+
+
+          .area-layer {
+            position:absolute;
+            inset:0;
+          }
+
+
+          .area {
+
+            position:absolute;
+
+            box-sizing:
+              border-box;
+
+            overflow:hidden;
+
+            border-radius:
+              9px;
+
+            border:
+              1px solid
+              rgba(
+                255,
+                255,
+                255,
+                .15
+              );
+
+            background:
+              rgba(
+                5,
+                12,
+                22,
+                .48
+              );
+          }
+
+
+          .edit-mode
+          .area {
+
+            border:
+              2px dashed
+              #00a8ff;
+
+            background:
+              rgba(
+                0,
+                168,
+                255,
+                .09
+              );
+          }
+
+
+          .area-header {
+
+            height:
+              29px;
+
+            box-sizing:
+              border-box;
+
+            display:flex;
+
+            align-items:center;
+
+            justify-content:
+              space-between;
+
+            padding:
+              5px 8px;
+
+            background:
+              rgba(
+                2,
+                8,
+                16,
+                .78
+              );
+
+            font-size:
+              11px;
+
+            font-weight:
+              600;
+          }
+
+
+          .edit-mode
+          .area-header {
+
+            cursor:move;
+
+            touch-action:none;
+          }
+
+
+          .area-count {
+
+            font-size:
+              9px;
+
+            opacity:
+              .5;
+          }
+
+
+          .devices {
+
+            display:grid;
+
+            grid-template-columns:
+              repeat(
+                auto-fill,
+                minmax(
+                  70px,
+                  1fr
+                )
+              );
+
+            gap:5px;
+
+            padding:6px;
+
+            max-height:
+              calc(
+                100% -
+                29px
+              );
+
+            overflow:auto;
+
+            box-sizing:
+              border-box;
+          }
+
+
+          .room-item {
+
+            position:relative;
+
+            min-height:
+              61px;
+
+            border-radius:
+              7px;
+
+            border:
+              1px solid
+              rgba(
+                255,
+                255,
+                255,
+                .08
+              );
+
+            background:
+              rgba(
+                6,
+                13,
+                22,
+                .84
+              );
+
+            display:flex;
+
+            flex-direction:
+              column;
+
+            align-items:center;
+
+            justify-content:center;
+
+            gap:3px;
+
+            padding:5px;
+
+            text-align:center;
+
+            box-sizing:
+              border-box;
+          }
+
+
+          .group-item {
+
+            cursor:pointer;
+
+            border-color:
+              rgba(
+                0,
+                168,
+                255,
+                .35
+              );
+          }
+
+
+          .group-item:hover {
+
+            border-color:
+              #00a8ff;
+
+            background:
+              rgba(
+                0,
+                100,
+                180,
+                .20
+              );
+          }
+
+
+          .room-item
+          ha-icon {
+
+            --mdc-icon-size:
+              20px;
+          }
+
+
+          .item-name {
+
+            width:100%;
+
+            font-size:
+              9px;
+
+            font-weight:
+              600;
+
+            overflow:hidden;
+
+            text-overflow:
+              ellipsis;
+
+            white-space:
+              nowrap;
+          }
+
+
+          .item-category {
+
+            font-size:
+              8px;
+
+            opacity:
+              .5;
+          }
+
+
+          .group-count {
+
+            position:absolute;
+
+            top:4px;
+            right:4px;
+
+            min-width:
+              17px;
+
+            height:
+              17px;
+
+            border-radius:
+              999px;
+
+            padding:
+              0 4px;
+
+            background:
+              #00a8ff;
+
+            color:white;
+
+            font-size:
+              9px;
+
+            display:flex;
+
+            align-items:center;
+
+            justify-content:center;
+          }
+
+
+          .status {
+
+            position:absolute;
+
+            top:5px;
+            right:5px;
+
+            width:
+              7px;
+
+            height:
+              7px;
+
+            border-radius:
+              50%;
+          }
+
+
+          .online {
+            background:
+              #4caf50;
+          }
+
+
+          .offline {
+            background:
+              #777;
+          }
+
+
+          .empty-room {
+
+            padding:
+              10px;
+
+            font-size:
+              10px;
+
+            opacity:
+              .4;
+          }
+
+
+          .resize-handle {
+
+            display:none;
+
+            position:absolute;
+
+            right:0;
+            bottom:0;
+
+            width:
+              18px;
+
+            height:
+              18px;
+
+            cursor:
+              nwse-resize;
+
+            touch-action:none;
+          }
+
+
+          .edit-mode
+          .resize-handle {
+
+            display:block;
+          }
+
+
+          .resize-handle::after {
+
+            content:"";
+
+            position:absolute;
+
+            right:4px;
+            bottom:4px;
+
+            width:8px;
+            height:8px;
+
+            border-right:
+              2px solid
+              #00a8ff;
+
+            border-bottom:
+              2px solid
+              #00a8ff;
+          }
+
+
+          /*
+           * FLOATING
            */
 
           .floating {
-            margin-top:18px;
+            margin-top:16px;
           }
 
 
           .floating-title {
-
-            font-size:15px;
+            font-size:14px;
             font-weight:600;
-            margin-bottom:8px;
+            margin-bottom:7px;
           }
 
 
           .floating-strip {
 
             display:flex;
+
             flex-wrap:wrap;
-            gap:7px;
+
+            gap:6px;
           }
 
 
@@ -1603,13 +2284,7 @@ class HaIotFloorplan extends HTMLElement {
 
             align-items:center;
 
-            gap:7px;
-
-            padding:
-              7px 10px;
-
-            border-radius:
-              999px;
+            gap:6px;
 
             border:
               1px solid
@@ -1617,33 +2292,39 @@ class HaIotFloorplan extends HTMLElement {
                 --divider-color
               );
 
-            background:
-              var(
-                --secondary-background-color
-              );
+            border-radius:
+              999px;
+
+            padding:
+              6px 9px;
 
             font-size:
-              11px;
+              10px;
           }
 
 
           .floating-device
           ha-icon {
-            --mdc-icon-size:17px;
+            --mdc-icon-size:
+              16px;
           }
 
 
           .floating-dot {
 
-            width:7px;
-            height:7px;
+            width:
+              7px;
 
-            border-radius:50%;
+            height:
+              7px;
+
+            border-radius:
+              50%;
           }
 
 
           /*
-           * CATEGORY POPUP
+           * MODALS
            */
 
           .modal-backdrop {
@@ -1656,16 +2337,16 @@ class HaIotFloorplan extends HTMLElement {
 
             display:flex;
 
-            align-items:center;
-
             justify-content:center;
+
+            align-items:center;
 
             background:
               rgba(
                 0,
                 0,
                 0,
-                .70
+                .72
               );
 
             padding:20px;
@@ -1676,17 +2357,14 @@ class HaIotFloorplan extends HTMLElement {
 
             width:
               min(
-                520px,
-                92vw
+                600px,
+                94vw
               );
 
             max-height:
-              80vh;
+              82vh;
 
             overflow:auto;
-
-            border-radius:
-              14px;
 
             border:
               1px solid
@@ -1697,18 +2375,12 @@ class HaIotFloorplan extends HTMLElement {
                 .45
               );
 
+            border-radius:
+              14px;
+
             background:
               var(
                 --card-background-color
-              );
-
-            box-shadow:
-              0 12px 40px
-              rgba(
-                0,
-                0,
-                0,
-                .55
               );
           }
 
@@ -1719,7 +2391,7 @@ class HaIotFloorplan extends HTMLElement {
 
             top:0;
 
-            z-index:1;
+            z-index:2;
 
             display:flex;
 
@@ -1728,20 +2400,18 @@ class HaIotFloorplan extends HTMLElement {
 
             align-items:center;
 
-            gap:10px;
-
             padding:
-              14px 16px;
-
-            background:
-              var(
-                --card-background-color
-              );
+              13px 16px;
 
             border-bottom:
               1px solid
               var(
                 --divider-color
+              );
+
+            background:
+              var(
+                --card-background-color
               );
           }
 
@@ -1752,10 +2422,10 @@ class HaIotFloorplan extends HTMLElement {
 
             align-items:center;
 
-            gap:9px;
+            gap:8px;
 
             font-size:
-              17px;
+              16px;
 
             font-weight:
               600;
@@ -1786,7 +2456,7 @@ class HaIotFloorplan extends HTMLElement {
             display:grid;
 
             grid-template-columns:
-              34px
+              30px
               1fr
               auto;
 
@@ -1796,7 +2466,7 @@ class HaIotFloorplan extends HTMLElement {
             align-items:center;
 
             padding:
-              11px 16px;
+              10px 16px;
 
             border-bottom:
               1px solid
@@ -1806,17 +2476,10 @@ class HaIotFloorplan extends HTMLElement {
           }
 
 
-          .modal-device
-          ha-icon {
-
-            --mdc-icon-size:
-              22px;
-          }
-
-
           .modal-device-name {
+
             font-size:
-              13px;
+              12px;
 
             font-weight:
               600;
@@ -1824,27 +2487,91 @@ class HaIotFloorplan extends HTMLElement {
 
 
           .modal-device-details {
+
             font-size:
-              11px;
+              10px;
 
             opacity:
-              .55;
-
-            margin-top:
-              2px;
+              .5;
           }
 
 
           .modal-status {
 
             width:
-              9px;
+              8px;
 
             height:
-              9px;
+              8px;
 
             border-radius:
               50%;
+          }
+
+
+          /*
+           * AREA ASSIGNMENT
+           */
+
+          .area-assignment {
+
+            display:grid;
+
+            grid-template-columns:
+              1fr
+              210px;
+
+            gap:
+              12px;
+
+            align-items:center;
+
+            padding:
+              10px 16px;
+
+            border-bottom:
+              1px solid
+              var(
+                --divider-color
+              );
+          }
+
+
+          .area-name {
+
+            font-size:
+              12px;
+
+            font-weight:
+              600;
+          }
+
+
+          .floor-select {
+
+            width:100%;
+
+            padding:
+              7px 9px;
+
+            border-radius:
+              7px;
+
+            border:
+              1px solid
+              var(
+                --divider-color
+              );
+
+            background:
+              var(
+                --card-background-color
+              );
+
+            color:
+              var(
+                --primary-text-color
+              );
           }
 
 
@@ -1858,35 +2585,6 @@ class HaIotFloorplan extends HTMLElement {
 
             opacity:
               .4;
-          }
-
-
-          @media (
-            max-width:
-              900px
-          ) {
-
-            .header {
-
-              flex-direction:
-                column;
-
-              align-items:
-                flex-start;
-            }
-
-
-            .devices {
-
-              grid-template-columns:
-                repeat(
-                  auto-fill,
-                  minmax(
-                    58px,
-                    1fr
-                  )
-                );
-            }
           }
 
         </style>
@@ -1904,17 +2602,13 @@ class HaIotFloorplan extends HTMLElement {
               </div>
 
               <div class="subtitle">
-
-                Hybrid grouping
-                • duplicate categories collapse automatically
-
+                Multi-floor • Hybrid grouping
               </div>
 
             </div>
 
 
             <div class="controls">
-
 
               <button
                 id="upload-background"
@@ -1925,13 +2619,15 @@ class HaIotFloorplan extends HTMLElement {
 
 
               ${
-                this._uploadedBackgroundUrl
+                this._backgroundUrls[
+                  data.floor.id
+                ]
                   ? `
                     <button
                       id="remove-background"
                       class="button"
                     >
-                      Remove uploaded image
+                      Remove image
                     </button>
                   `
                   : ""
@@ -1941,7 +2637,7 @@ class HaIotFloorplan extends HTMLElement {
               <input
                 id="background-file"
                 type="file"
-                accept="image/png,image/jpeg,image/webp,image/svg+xml"
+                accept="image/*"
                 style="display:none"
               >
 
@@ -1966,16 +2662,115 @@ class HaIotFloorplan extends HTMLElement {
 
               </button>
 
+            </div>
+
+          </div>
+
+
+          <!-- FLOOR TABS -->
+
+          <div class="floor-tabs">
+
+            ${
+              this._state.floors
+                .map(
+                  floor => `
+
+                    <button
+                      class="
+                        floor-tab
+                        ${
+                          floor.id ===
+                          data.floor.id
+                            ? "active"
+                            : ""
+                        }
+                      "
+                      data-floor-id="${
+                        this._escapeHtml(
+                          floor.id
+                        )
+                      }"
+                    >
+
+                      ${
+                        this._escapeHtml(
+                          floor.name
+                        )
+                      }
+
+                    </button>
+
+                  `
+                )
+                .join("")
+            }
+
+
+            <button
+              id="add-floor"
+              class="add-floor"
+              title="Add floor"
+            >
+              +
+            </button>
+
+
+            <div class="floor-tools">
+
+              <button
+                id="assign-areas"
+                class="button"
+              >
+
+                Assign areas
+
+                ${
+                  unassignedCount
+                    ? ` (${unassignedCount})`
+                    : ""
+                }
+
+              </button>
+
 
               ${
                 this._editMode
                   ? `
+
+                    <button
+                      id="rename-floor"
+                      class="button"
+                    >
+                      Rename
+                    </button>
+
+
                     <button
                       id="reset-layout"
                       class="button"
                     >
                       Reset layout
                     </button>
+
+
+                    ${
+                      this._state.floors.length >
+                      1
+                        ? `
+                          <button
+                            id="delete-floor"
+                            class="
+                              button
+                              danger
+                            "
+                          >
+                            Delete floor
+                          </button>
+                        `
+                        : ""
+                    }
+
                   `
                   : ""
               }
@@ -1990,8 +2785,19 @@ class HaIotFloorplan extends HTMLElement {
               ? `
                 <div class="edit-note">
 
-                  Drag rooms by their title bar.
-                  Resize from the lower-right corner.
+                  Editing
+                  <b>
+                    ${
+                      this._escapeHtml(
+                        data.floor.name
+                      )
+                    }
+                  </b>.
+
+                  Drag room headers,
+                  resize from the bottom-right corner,
+                  and use Assign areas to move rooms
+                  between floors.
 
                 </div>
               `
@@ -1999,15 +2805,12 @@ class HaIotFloorplan extends HTMLElement {
           }
 
 
+          <!-- FLOORPLAN -->
+
           <div
             id="floorplan"
             class="
               floorplan
-              ${
-                background
-                  ? ""
-                  : "blank-floorplan"
-              }
               ${
                 this._editMode
                   ? "edit-mode"
@@ -2052,6 +2855,8 @@ class HaIotFloorplan extends HTMLElement {
           </div>
 
 
+          <!-- FLOATING -->
+
           <div class="floating">
 
             <div class="floating-title">
@@ -2059,44 +2864,36 @@ class HaIotFloorplan extends HTMLElement {
             </div>
 
 
-            ${
-              data.floating.length
-                ? `
-                  <div class="floating-strip">
+            <div class="floating-strip">
 
-                    ${
-                      data.floating
-                        .map(
-                          device =>
-                            this._renderFloating(
-                              device
-                            )
-                        )
-                        .join("")
-                    }
+              ${
+                data.floating
+                  .map(
+                    device =>
+                      this._renderFloating(
+                        device
+                      )
+                  )
+                  .join("")
+              }
 
-                  </div>
-                `
-                : `
-                  <div
-                    style="
-                      opacity:.5;
-                      font-size:11px;
-                    "
-                  >
-                    No floating devices.
-                  </div>
-                `
-            }
+            </div>
 
           </div>
 
 
           <div class="footer">
 
-            HA IoT Floorplan v0.3
-            • Hybrid grouping
-            • Browser-stored background
+            HA IoT Floorplan v0.4
+            •
+            ${
+              this._escapeHtml(
+                data.floor.name
+              )
+            }
+            •
+            ${data.areas.length}
+            Areas
 
           </div>
 
@@ -2105,6 +2902,11 @@ class HaIotFloorplan extends HTMLElement {
 
         ${
           this._renderGroupModal()
+        }
+
+
+        ${
+          this._renderAreaManagerModal()
         }
 
       </ha-card>
@@ -2116,9 +2918,9 @@ class HaIotFloorplan extends HTMLElement {
 
 
   /*
-   * -------------------------------------------------
-   * AREA
-   * -------------------------------------------------
+   * =================================================
+   * AREA DISPLAY
+   * =================================================
    */
 
 
@@ -2126,8 +2928,12 @@ class HaIotFloorplan extends HTMLElement {
     area
   ) {
 
+    const floor =
+      this._activeFloor();
+
+
     const layout =
-      this._layout[
+      floor.layout[
         area.areaId
       ];
 
@@ -2170,45 +2976,56 @@ class HaIotFloorplan extends HTMLElement {
         >
 
           <span>
-            ${this._escapeHtml(
-              area.areaName
-            )}
+            ${
+              this._escapeHtml(
+                area.areaName
+              )
+            }
           </span>
 
 
           <span class="area-count">
-
             ${area.devices.length}
-            devices
-
           </span>
 
         </div>
 
 
-        <div class="devices">
+        ${
+          items.length
 
-          ${
-            items
-              .map(
-                item =>
-                  item.type ===
-                  "group"
+            ? `
+              <div class="devices">
 
-                    ? this._renderGroupTile(
-                        area,
-                        item
-                      )
+                ${
+                  items
+                    .map(
+                      item =>
+                        item.type ===
+                        "group"
 
-                    : this._renderDeviceTile(
-                        item.device,
-                        item.category
-                      )
-              )
-              .join("")
-          }
+                          ? this._renderGroupTile(
+                              area,
+                              item
+                            )
 
-        </div>
+                          : this._renderDeviceTile(
+                              item.device,
+                              item.category
+                            )
+                    )
+                    .join("")
+                }
+
+              </div>
+            `
+
+            : `
+              <div class="empty-room">
+                No fixed IoT devices
+              </div>
+            `
+        }
 
 
         <div
@@ -2244,13 +3061,6 @@ class HaIotFloorplan extends HTMLElement {
         );
 
 
-    const onlineCount =
-      item.devices.filter(
-        device =>
-          device.online
-      ).length;
-
-
     return `
       <div
         class="
@@ -2269,11 +3079,8 @@ class HaIotFloorplan extends HTMLElement {
         }"
       >
 
-
         <div class="group-count">
-
           ${item.devices.length}
-
         </div>
 
 
@@ -2287,21 +3094,24 @@ class HaIotFloorplan extends HTMLElement {
 
 
         <div class="item-name">
-
           ${
             this._escapeHtml(
               title
             )
           }
-
         </div>
 
 
         <div class="item-category">
-
-          ${onlineCount}
+          ${
+            item.devices
+              .filter(
+                device =>
+                  device.online
+              )
+              .length
+          }
           online
-
         </div>
 
       </div>
@@ -2331,7 +3141,6 @@ class HaIotFloorplan extends HTMLElement {
         }"
       >
 
-
         <div
           class="
             status
@@ -2354,13 +3163,11 @@ class HaIotFloorplan extends HTMLElement {
 
 
         <div class="item-name">
-
           ${
             this._escapeHtml(
               device.name
             )
           }
-
         </div>
 
 
@@ -2383,9 +3190,167 @@ class HaIotFloorplan extends HTMLElement {
 
 
   /*
-   * -------------------------------------------------
-   * GROUP POPUP
-   * -------------------------------------------------
+   * =================================================
+   * AREA FLOOR MANAGER
+   * =================================================
+   */
+
+
+  _renderAreaManagerModal() {
+
+    if (
+      !this._areaManagerOpen
+    ) {
+      return "";
+    }
+
+
+    const areas =
+      [
+        ...this._core.areas
+      ]
+        .sort(
+          (
+            a,
+            b
+          ) =>
+            a.name.localeCompare(
+              b.name
+            )
+        );
+
+
+    return `
+      <div
+        class="modal-backdrop"
+        id="area-manager-backdrop"
+      >
+
+        <div class="modal">
+
+          <div class="modal-header">
+
+            <div class="modal-title">
+
+              <ha-icon
+                icon="mdi:layers-triple"
+              ></ha-icon>
+
+              Assign Areas to floors
+
+            </div>
+
+
+            <button
+              class="modal-close"
+              id="close-area-manager"
+            >
+              ×
+            </button>
+
+          </div>
+
+
+          ${
+            areas
+              .map(
+                area => {
+
+                  const floor =
+                    this._floorForArea(
+                      area.area_id
+                    );
+
+
+                  return `
+
+                    <div class="area-assignment">
+
+                      <div class="area-name">
+
+                        ${
+                          this._escapeHtml(
+                            area.name
+                          )
+                        }
+
+                      </div>
+
+
+                      <select
+                        class="floor-select"
+                        data-area-floor="${
+                          this._escapeHtml(
+                            area.area_id
+                          )
+                        }"
+                      >
+
+                        <option
+                          value=""
+                          ${
+                            !floor
+                              ? "selected"
+                              : ""
+                          }
+                        >
+                          Unassigned
+                        </option>
+
+
+                        ${
+                          this._state.floors
+                            .map(
+                              item => `
+
+                                <option
+                                  value="${
+                                    this._escapeHtml(
+                                      item.id
+                                    )
+                                  }"
+                                  ${
+                                    floor?.id ===
+                                    item.id
+                                      ? "selected"
+                                      : ""
+                                  }
+                                >
+
+                                  ${
+                                    this._escapeHtml(
+                                      item.name
+                                    )
+                                  }
+
+                                </option>
+
+                              `
+                            )
+                            .join("")
+                        }
+
+                      </select>
+
+                    </div>
+
+                  `;
+                }
+              )
+              .join("")
+          }
+
+        </div>
+
+      </div>
+    `;
+  }
+
+
+  /*
+   * =================================================
+   * CATEGORY GROUP POPUP
+   * =================================================
    */
 
 
@@ -2440,6 +3405,11 @@ class HaIotFloorplan extends HTMLElement {
     }
 
 
+    const category =
+      this._activeGroup
+        .category;
+
+
     const devices =
       area.devices.filter(
         device =>
@@ -2447,21 +3417,8 @@ class HaIotFloorplan extends HTMLElement {
             .getResolvedCategory(
               device
             ) ===
-          this._activeGroup
-            .category
-      );
-
-
-    const category =
-      this._activeGroup
-        .category;
-
-
-    const title =
-      this._core
-        .categoryTitle(
           category
-        );
+      );
 
 
     const icon =
@@ -2477,14 +3434,9 @@ class HaIotFloorplan extends HTMLElement {
         id="group-modal-backdrop"
       >
 
-        <div
-          class="modal"
-          id="group-modal"
-        >
-
+        <div class="modal">
 
           <div class="modal-header">
-
 
             <div class="modal-title">
 
@@ -2497,32 +3449,31 @@ class HaIotFloorplan extends HTMLElement {
               ></ha-icon>
 
 
-              <span>
+              ${
+                this._escapeHtml(
+                  area.areaName
+                )
+              }
 
-                ${
-                  this._escapeHtml(
-                    area.areaName
-                  )
-                }
+              •
 
-                •
+              ${
+                this._escapeHtml(
+                  this._core
+                    .categoryTitle(
+                      category
+                    )
+                )
+              }
 
-                ${
-                  this._escapeHtml(
-                    title
-                  )
-                }
-
-                (${devices.length})
-
-              </span>
+              (${devices.length})
 
             </div>
 
 
             <button
-              class="modal-close"
               id="close-group-modal"
+              class="modal-close"
             >
               ×
             </button>
@@ -2615,9 +3566,9 @@ class HaIotFloorplan extends HTMLElement {
 
 
   /*
-   * -------------------------------------------------
+   * =================================================
    * FLOATING
-   * -------------------------------------------------
+   * =================================================
    */
 
 
@@ -2632,41 +3583,26 @@ class HaIotFloorplan extends HTMLElement {
         );
 
 
-    const icon =
-      this._core
-        .categoryIcon(
-          category
-        );
-
-
     return `
-      <div
-        class="floating-device"
-        title="${
-          this._escapeHtml(
-            device.name
-          )
-        }"
-      >
+      <div class="floating-device">
 
         <ha-icon
           icon="${
             this._escapeHtml(
-              icon
+              this._core
+                .categoryIcon(
+                  category
+                )
             )
           }"
         ></ha-icon>
 
 
-        <span>
-
-          ${
-            this._escapeHtml(
-              device.name
-            )
-          }
-
-        </span>
+        ${
+          this._escapeHtml(
+            device.name
+          )
+        }
 
 
         <span
@@ -2686,9 +3622,9 @@ class HaIotFloorplan extends HTMLElement {
 
 
   /*
-   * -------------------------------------------------
-   * HANDLERS
-   * -------------------------------------------------
+   * =================================================
+   * EVENTS
+   * =================================================
    */
 
 
@@ -2696,7 +3632,109 @@ class HaIotFloorplan extends HTMLElement {
 
 
     /*
-     * Background upload
+     * FLOOR TABS
+     */
+
+    for (
+      const tab
+      of this.querySelectorAll(
+        "[data-floor-id]"
+      )
+    ) {
+
+      tab.addEventListener(
+        "click",
+        () =>
+          this._switchFloor(
+            tab.dataset.floorId
+          )
+      );
+    }
+
+
+    this.querySelector(
+      "#add-floor"
+    )?.addEventListener(
+      "click",
+      () =>
+        this._addFloor()
+    );
+
+
+    this.querySelector(
+      "#rename-floor"
+    )?.addEventListener(
+      "click",
+      () =>
+        this._renameFloor()
+    );
+
+
+    this.querySelector(
+      "#delete-floor"
+    )?.addEventListener(
+      "click",
+      () =>
+        this._deleteFloor()
+    );
+
+
+    /*
+     * AREA ASSIGNMENT
+     */
+
+    this.querySelector(
+      "#assign-areas"
+    )?.addEventListener(
+      "click",
+      () => {
+
+        this._areaManagerOpen =
+          true;
+
+        this._render();
+      }
+    );
+
+
+    this.querySelector(
+      "#close-area-manager"
+    )?.addEventListener(
+      "click",
+      () => {
+
+        this._areaManagerOpen =
+          false;
+
+        this._render();
+      }
+    );
+
+
+    for (
+      const select
+      of this.querySelectorAll(
+        "[data-area-floor]"
+      )
+    ) {
+
+      select.addEventListener(
+        "change",
+        event =>
+          this._assignAreaToFloor(
+
+            event.target.dataset
+              .areaFloor,
+
+            event.target.value
+
+          )
+      );
+    }
+
+
+    /*
+     * BACKGROUND UPLOAD
      */
 
     const fileInput =
@@ -2729,20 +3767,6 @@ class HaIotFloorplan extends HTMLElement {
           }
 
 
-          if (
-            !file.type.startsWith(
-              "image/"
-            )
-          ) {
-
-            alert(
-              "Please select an image file."
-            );
-
-            return;
-          }
-
-
           await this
             ._saveUploadedBackground(
               file
@@ -2761,7 +3785,7 @@ class HaIotFloorplan extends HTMLElement {
 
 
     /*
-     * Layout editor
+     * EDITING
      */
 
     this.querySelector(
@@ -2783,7 +3807,7 @@ class HaIotFloorplan extends HTMLElement {
 
 
     /*
-     * Category group popup
+     * GROUPS
      */
 
     for (
@@ -2798,20 +3822,19 @@ class HaIotFloorplan extends HTMLElement {
         () => {
 
           if (
-            this._editMode
+            !this._editMode
           ) {
-            return;
+
+            this._openGroup(
+
+              tile.dataset
+                .groupArea,
+
+              tile.dataset
+                .groupCategory
+
+            );
           }
-
-
-          this._openGroup(
-
-            tile.dataset
-              .groupArea,
-
-            tile.dataset
-              .groupCategory
-          );
         }
       );
     }
@@ -2826,21 +3849,9 @@ class HaIotFloorplan extends HTMLElement {
     );
 
 
-    this.querySelector(
-      "#group-modal-backdrop"
-    )?.addEventListener(
-      "click",
-      event => {
-
-        if (
-          event.target.id ===
-          "group-modal-backdrop"
-        ) {
-          this._closeGroup();
-        }
-      }
-    );
-
+    /*
+     * DRAG / RESIZE
+     */
 
     if (
       !this._editMode
@@ -2889,42 +3900,10 @@ class HaIotFloorplan extends HTMLElement {
 
 
   /*
-   * -------------------------------------------------
-   * EDIT MODE
-   * -------------------------------------------------
+   * =================================================
+   * DRAGGING
+   * =================================================
    */
-
-
-  _toggleEditMode() {
-
-    this._editMode =
-      !this._editMode;
-
-
-    this._render();
-  }
-
-
-  _resetLayout() {
-
-    const confirmed =
-      confirm(
-        "Reset all room positions and sizes?"
-      );
-
-
-    if (!confirmed) {
-      return;
-    }
-
-
-    this._layout = {};
-
-
-    this._saveLayout();
-
-    this._render();
-  }
 
 
   _getCanvas() {
@@ -2944,8 +3923,12 @@ class HaIotFloorplan extends HTMLElement {
       this._getCanvas();
 
 
+    const floor =
+      this._activeFloor();
+
+
     const layout =
-      this._layout[
+      floor.layout[
         areaId
       ];
 
@@ -2985,7 +3968,6 @@ class HaIotFloorplan extends HTMLElement {
       original: {
         ...layout
       }
-
     };
 
 
@@ -3004,6 +3986,7 @@ class HaIotFloorplan extends HTMLElement {
           move
         );
 
+
         window.removeEventListener(
           "pointerup",
           end
@@ -3014,7 +3997,7 @@ class HaIotFloorplan extends HTMLElement {
           null;
 
 
-        this._saveLayout();
+        this._saveState();
       };
 
 
@@ -3046,8 +4029,12 @@ class HaIotFloorplan extends HTMLElement {
       this._dragState;
 
 
+    const floor =
+      this._activeFloor();
+
+
     const layout =
-      this._layout[
+      floor.layout[
         state.areaId
       ];
 
@@ -3072,9 +4059,12 @@ class HaIotFloorplan extends HTMLElement {
 
     layout.x =
       this._clamp(
+
         state.original.x +
         dx,
+
         0,
+
         100 -
         layout.w
       );
@@ -3082,9 +4072,12 @@ class HaIotFloorplan extends HTMLElement {
 
     layout.y =
       this._clamp(
+
         state.original.y +
         dy,
+
         0,
+
         100 -
         layout.h
       );
@@ -3096,6 +4089,13 @@ class HaIotFloorplan extends HTMLElement {
   }
 
 
+  /*
+   * =================================================
+   * RESIZING
+   * =================================================
+   */
+
+
   _startResize(
     event,
     areaId
@@ -3105,8 +4105,12 @@ class HaIotFloorplan extends HTMLElement {
       this._getCanvas();
 
 
+    const floor =
+      this._activeFloor();
+
+
     const layout =
-      this._layout[
+      floor.layout[
         areaId
       ];
 
@@ -3148,7 +4152,6 @@ class HaIotFloorplan extends HTMLElement {
       original: {
         ...layout
       }
-
     };
 
 
@@ -3167,6 +4170,7 @@ class HaIotFloorplan extends HTMLElement {
           move
         );
 
+
         window.removeEventListener(
           "pointerup",
           end
@@ -3177,7 +4181,7 @@ class HaIotFloorplan extends HTMLElement {
           null;
 
 
-        this._saveLayout();
+        this._saveState();
       };
 
 
@@ -3209,8 +4213,12 @@ class HaIotFloorplan extends HTMLElement {
       this._resizeState;
 
 
+    const floor =
+      this._activeFloor();
+
+
     const layout =
-      this._layout[
+      floor.layout[
         state.areaId
       ];
 
@@ -3235,9 +4243,12 @@ class HaIotFloorplan extends HTMLElement {
 
     layout.w =
       this._clamp(
+
         state.original.w +
         dx,
+
         7,
+
         100 -
         layout.x
       );
@@ -3245,9 +4256,12 @@ class HaIotFloorplan extends HTMLElement {
 
     layout.h =
       this._clamp(
+
         state.original.h +
         dy,
+
         8,
+
         100 -
         layout.y
       );
@@ -3265,14 +4279,20 @@ class HaIotFloorplan extends HTMLElement {
 
     const element =
       this.querySelector(
+
         `.area[data-area-id="${CSS.escape(
           areaId
         )}"]`
+
       );
 
 
+    const floor =
+      this._activeFloor();
+
+
     const layout =
-      this._layout[
+      floor.layout[
         areaId
       ];
 
@@ -3309,13 +4329,23 @@ class HaIotFloorplan extends HTMLElement {
   ) {
 
     return Math.min(
+
       max,
+
       Math.max(
         min,
         value
       )
+
     );
   }
+
+
+  /*
+   * =================================================
+   * HELPERS
+   * =================================================
+   */
 
 
   _renderLoading() {
@@ -3323,11 +4353,7 @@ class HaIotFloorplan extends HTMLElement {
     this.innerHTML = `
       <ha-card header="HA IoT Floorplan">
 
-        <div
-          style="
-            padding:16px;
-          "
-        >
+        <div style="padding:16px">
           Loading IoT floorplan...
         </div>
 
@@ -3416,14 +4442,14 @@ if (
       "HA IoT Floorplan",
 
     description:
-      "Visual IoT floorplan using Home Assistant Areas"
+      "Multi-floor visual IoT floorplan using Home Assistant Areas"
 
   });
 }
 
 
 console.info(
-  "%c HA IoT Floorplan %c v0.3 ",
+  "%c HA IoT Floorplan %c v0.4 ",
   "background:#00a8ff;color:white;font-weight:bold;",
   "background:#333;color:white;"
 );
