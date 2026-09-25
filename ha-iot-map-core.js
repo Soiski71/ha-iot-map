@@ -13,6 +13,7 @@ export class HaIotMapCore {
     this.savingArea = new Set();
     this.savingClass = new Set();
     this.savingCategory = new Set();
+    this.savingName = new Set();
 
     this.labelDefs = {
       fixed: {
@@ -138,7 +139,9 @@ export class HaIotMapCore {
 
   async initialize() {
     if (!this.hass) {
-      throw new Error("Home Assistant object not available");
+      throw new Error(
+        "Home Assistant object not available"
+      );
     }
 
     this.loading = true;
@@ -159,26 +162,37 @@ export class HaIotMapCore {
       labels
     ] = await Promise.all([
       this.hass.callWS({
-        type: "config/area_registry/list"
+        type:
+          "config/area_registry/list"
       }),
 
       this.hass.callWS({
-        type: "config/device_registry/list"
+        type:
+          "config/device_registry/list"
       }),
 
       this.hass.callWS({
-        type: "config/entity_registry/list"
+        type:
+          "config/entity_registry/list"
       }),
 
       this.hass.callWS({
-        type: "config/label_registry/list"
+        type:
+          "config/label_registry/list"
       })
     ]);
 
-    this.areas = areas || [];
-    this.devices = devices || [];
-    this.entities = entities || [];
-    this.labels = labels || [];
+    this.areas =
+      areas || [];
+
+    this.devices =
+      devices || [];
+
+    this.entities =
+      entities || [];
+
+    this.labels =
+      labels || [];
 
     this.resolveLabelIds();
   }
@@ -190,10 +204,14 @@ export class HaIotMapCore {
         .toLowerCase();
 
     const match =
-      this.labels.find(label =>
-        String(label.name || "")
-          .trim()
-          .toLowerCase() === wanted
+      this.labels.find(
+        label =>
+          String(
+            label.name || ""
+          )
+            .trim()
+            .toLowerCase() ===
+          wanted
       );
 
     return (
@@ -204,17 +222,33 @@ export class HaIotMapCore {
   }
 
   resolveLabelIds() {
-    for (const key of Object.keys(this.labelDefs)) {
+    for (
+      const key
+      of Object.keys(
+        this.labelDefs
+      )
+    ) {
       this.labelIds[key] =
         this.findLabelIdByName(
-          this.labelDefs[key].name
+          this.labelDefs[
+            key
+          ].name
         );
     }
 
-    for (const key of Object.keys(this.categoryDefs)) {
-      this.categoryLabelIds[key] =
+    for (
+      const key
+      of Object.keys(
+        this.categoryDefs
+      )
+    ) {
+      this.categoryLabelIds[
+        key
+      ] =
         this.findLabelIdByName(
-          this.categoryDefs[key].name
+          this.categoryDefs[
+            key
+          ].name
         );
     }
   }
@@ -222,10 +256,16 @@ export class HaIotMapCore {
   async createLabel(def) {
     try {
       await this.hass.callWS({
-        type: "config/label_registry/create",
-        name: def.name,
-        icon: def.icon
+        type:
+          "config/label_registry/create",
+
+        name:
+          def.name,
+
+        icon:
+          def.icon
       });
+
     } catch (err) {
       console.warn(
         "HA IoT Map: label creation warning",
@@ -239,15 +279,25 @@ export class HaIotMapCore {
     this.resolveLabelIds();
 
     const missingPlacement =
-      Object.keys(this.labelDefs)
-        .filter(key =>
-          !this.labelIds[key]
+      Object.keys(
+        this.labelDefs
+      )
+        .filter(
+          key =>
+            !this.labelIds[
+              key
+            ]
         );
 
     const missingCategories =
-      Object.keys(this.categoryDefs)
-        .filter(key =>
-          !this.categoryLabelIds[key]
+      Object.keys(
+        this.categoryDefs
+      )
+        .filter(
+          key =>
+            !this.categoryLabelIds[
+              key
+            ]
         );
 
     if (
@@ -256,31 +306,44 @@ export class HaIotMapCore {
     ) {
       this.setupMessage =
         "Shared classification and category labels ready";
+
       return;
     }
 
     if (!this.isAdmin) {
       this.setupMessage =
         "Shared setup incomplete. An administrator must open this card once.";
+
       return;
     }
 
-    for (const key of missingPlacement) {
+    for (
+      const key
+      of missingPlacement
+    ) {
       await this.createLabel(
-        this.labelDefs[key]
+        this.labelDefs[
+          key
+        ]
       );
     }
 
-    for (const key of missingCategories) {
+    for (
+      const key
+      of missingCategories
+    ) {
       await this.createLabel(
-        this.categoryDefs[key]
+        this.categoryDefs[
+          key
+        ]
       );
     }
 
     this.labels =
       (
         await this.hass.callWS({
-          type: "config/label_registry/list"
+          type:
+            "config/label_registry/list"
         })
       ) || [];
 
@@ -301,7 +364,9 @@ export class HaIotMapCore {
   getStoredClassification(item) {
     const labels =
       new Set(
-        this.getRegistryLabels(item)
+        this.getRegistryLabels(
+          item
+        )
       );
 
     if (
@@ -337,11 +402,16 @@ export class HaIotMapCore {
   getStoredCategory(item) {
     const labels =
       new Set(
-        this.getRegistryLabels(item)
+        this.getRegistryLabels(
+          item
+        )
       );
 
     for (
-      const [key, id]
+      const [
+        key,
+        id
+      ]
       of Object.entries(
         this.categoryLabelIds
       )
@@ -359,31 +429,48 @@ export class HaIotMapCore {
 
   getResolvedCategory(item) {
     const stored =
-      this.getStoredCategory(item);
+      this.getStoredCategory(
+        item
+      );
 
-    if (stored !== "auto") {
+    if (
+      stored !==
+      "auto"
+    ) {
       return stored;
     }
 
-    return this.autoCategory(item);
+    return this.autoCategory(
+      item
+    );
   }
 
   autoCategory(item) {
     const domains =
       new Set(
-        (item.entityIds || [])
-          .map(entityId =>
-            String(entityId)
-              .split(".")[0]
+        (
+          item.entityIds ||
+          []
+        )
+          .map(
+            entityId =>
+              String(
+                entityId
+              )
+                .split(".")[0]
           )
       );
 
     const platforms =
       new Set(
-        (item.platforms || [])
-          .map(p =>
-            String(p)
-              .toLowerCase()
+        (
+          item.platforms ||
+          []
+        )
+          .map(
+            p =>
+              String(p)
+                .toLowerCase()
           )
       );
 
@@ -399,95 +486,143 @@ export class HaIotMapCore {
         .toLowerCase();
 
     if (
-      domains.has("camera") ||
-      platforms.has("reolink") ||
-      /\bcam\b|camera|cctv|reolink/.test(text)
+      domains.has(
+        "camera"
+      ) ||
+      platforms.has(
+        "reolink"
+      ) ||
+      /\bcam\b|camera|cctv|reolink/.test(
+        text
+      )
     ) {
       return "camera";
     }
 
     if (
-      domains.has("vacuum") ||
-      platforms.has("roborock") ||
-      /roborock|vacuum|imuri/.test(text)
+      domains.has(
+        "vacuum"
+      ) ||
+      platforms.has(
+        "roborock"
+      ) ||
+      /roborock|vacuum|imuri/.test(
+        text
+      )
     ) {
       return "vacuum";
     }
 
     if (
-      /epson|brother|laserjet|printer|tulostin/.test(text)
+      /epson|brother|laserjet|printer|tulostin/.test(
+        text
+      )
     ) {
       return "printer";
     }
 
     if (
-      /asustor|synology|qnap|\bnas\b/.test(text)
+      /asustor|synology|qnap|\bnas\b/.test(
+        text
+      )
     ) {
       return "nas";
     }
 
     if (
-      /securityserver|ubuntu.*server|\bserver\b|proxmox|docker host/.test(text)
+      /securityserver|ubuntu.*server|\bserver\b|proxmox|docker host/.test(
+        text
+      )
     ) {
       return "server";
     }
 
     if (
-      /pfsense|router|archer|access point|\bap\b|gateway|be550|be230/.test(text)
+      /pfsense|router|archer|access point|\bap\b|gateway|be550|be230/.test(
+        text
+      )
     ) {
       return "network";
     }
 
     if (
-      /ipad|tablet|lenovo[_ -]?tab|\btab\b/.test(text)
+      /ipad|tablet|lenovo[_ -]?tab|\btab\b/.test(
+        text
+      )
     ) {
       return "tablet";
     }
 
     if (
-      platforms.has("mobile_app") ||
-      /iphone|android phone|cellphone|phone|puhelin/.test(text)
+      platforms.has(
+        "mobile_app"
+      ) ||
+      /iphone|android phone|cellphone|phone|puhelin/.test(
+        text
+      )
     ) {
       return "mobile";
     }
 
     if (
-      /laptop|desktop|computer|\bpc\b|windows|macbook/.test(text)
+      /laptop|desktop|computer|\bpc\b|windows|macbook/.test(
+        text
+      )
     ) {
       return "computer";
     }
 
     if (
-      domains.has("media_player") ||
-      /television|\btv\b|soundbar|chromecast|apple tv|receiver|amplifier/.test(text)
+      domains.has(
+        "media_player"
+      ) ||
+      /television|\btv\b|soundbar|chromecast|apple tv|receiver|amplifier/.test(
+        text
+      )
     ) {
       return "media";
     }
 
     if (
-      domains.has("light") ||
-      /light|lamp|valo|valot|led/.test(text)
+      domains.has(
+        "light"
+      ) ||
+      /light|lamp|valo|valot|led/.test(
+        text
+      )
     ) {
       return "lighting";
     }
 
     if (
-      domains.has("switch") ||
-      /plug|pistorasia|socket|relay|rele/.test(text)
+      domains.has(
+        "switch"
+      ) ||
+      /plug|pistorasia|socket|relay|rele/.test(
+        text
+      )
     ) {
       return "switch";
     }
 
     if (
-      domains.has("sensor") ||
-      domains.has("binary_sensor") ||
-      /temp|temperature|humidity|sensor|bme|dht/.test(text)
+      domains.has(
+        "sensor"
+      ) ||
+      domains.has(
+        "binary_sensor"
+      ) ||
+      /temp|temperature|humidity|sensor|bme|dht/.test(
+        text
+      )
     ) {
       return "sensor";
     }
 
     if (
-      /dishwasher|washing machine|dryer|freezer|fridge|oven|sauna|appliance/.test(text)
+      /dishwasher|washing machine|dryer|freezer|fridge|oven|sauna|appliance/.test(
+        text
+      )
     ) {
       return "appliance";
     }
@@ -517,7 +652,9 @@ export class HaIotMapCore {
     item,
     labels
   ) {
-    if (item.registryDeviceId) {
+    if (
+      item.registryDeviceId
+    ) {
       await this.hass.callWS({
         type:
           "config/device_registry/update",
@@ -531,7 +668,9 @@ export class HaIotMapCore {
       return;
     }
 
-    if (item.registryEntityId) {
+    if (
+      item.registryEntityId
+    ) {
       await this.hass.callWS({
         type:
           "config/entity_registry/update",
@@ -567,7 +706,9 @@ export class HaIotMapCore {
 
     const item =
       inventory.find(
-        x => x.id === itemId
+        x =>
+          x.id ===
+          itemId
       );
 
     if (
@@ -598,12 +739,15 @@ export class HaIotMapCore {
         )
       ) {
         if (id) {
-          current.delete(id);
+          current.delete(
+            id
+          );
         }
       }
 
       if (
-        value !== "auto"
+        value !==
+        "auto"
       ) {
         const labelId =
           this.labelIds[
@@ -623,12 +767,15 @@ export class HaIotMapCore {
 
       await this.writeLabels(
         item,
-        [...current]
+        [
+          ...current
+        ]
       );
 
       await this.reloadRegistries();
 
       return true;
+
     } finally {
       this.savingClass.delete(
         item.id
@@ -653,7 +800,9 @@ export class HaIotMapCore {
 
     const item =
       inventory.find(
-        x => x.id === itemId
+        x =>
+          x.id ===
+          itemId
       );
 
     if (
@@ -684,12 +833,15 @@ export class HaIotMapCore {
         )
       ) {
         if (id) {
-          current.delete(id);
+          current.delete(
+            id
+          );
         }
       }
 
       if (
-        value !== "auto"
+        value !==
+        "auto"
       ) {
         const labelId =
           this.categoryLabelIds[
@@ -709,12 +861,15 @@ export class HaIotMapCore {
 
       await this.writeLabels(
         item,
-        [...current]
+        [
+          ...current
+        ]
       );
 
       await this.reloadRegistries();
 
       return true;
+
     } finally {
       this.savingCategory.delete(
         item.id
@@ -739,7 +894,9 @@ export class HaIotMapCore {
 
     const item =
       inventory.find(
-        x => x.id === itemId
+        x =>
+          x.id ===
+          itemId
       );
 
     if (!item) {
@@ -760,6 +917,7 @@ export class HaIotMapCore {
           areaId ||
           null
       });
+
     } else if (
       item.registryEntityId
     ) {
@@ -781,6 +939,94 @@ export class HaIotMapCore {
     return true;
   }
 
+  async setFriendlyName(
+    itemId,
+    value
+  ) {
+    if (!this.isAdmin) {
+      return;
+    }
+
+    const {
+      inventory
+    } =
+      this.deduplicateInventory(
+        this.buildRawInventory()
+      );
+
+    const item =
+      inventory.find(
+        x =>
+          x.id ===
+          itemId
+      );
+
+    if (
+      !item ||
+      this.savingName.has(
+        item.id
+      )
+    ) {
+      return;
+    }
+
+    this.savingName.add(
+      item.id
+    );
+
+    try {
+      const trimmed =
+        String(
+          value ?? ""
+        ).trim();
+
+      if (
+        item.registryDeviceId
+      ) {
+        await this.hass.callWS({
+          type:
+            "config/device_registry/update",
+
+          device_id:
+            item.registryDeviceId,
+
+          name_by_user:
+            trimmed ||
+            null
+        });
+
+      } else if (
+        item.registryEntityId
+      ) {
+        await this.hass.callWS({
+          type:
+            "config/entity_registry/update",
+
+          entity_id:
+            item.registryEntityId,
+
+          name:
+            trimmed ||
+            null
+        });
+
+      } else {
+        throw new Error(
+          "No writable HA registry entry"
+        );
+      }
+
+      await this.reloadRegistries();
+
+      return true;
+
+    } finally {
+      this.savingName.delete(
+        item.id
+      );
+    }
+  }
+
   async migrateLegacyClassifications() {
     if (!this.isAdmin) {
       return;
@@ -789,22 +1035,27 @@ export class HaIotMapCore {
     if (
       localStorage.getItem(
         this.migrationStorageKey
-      ) === "1"
+      ) ===
+      "1"
     ) {
       return;
     }
 
-    let legacy = {};
+    let legacy =
+      {};
 
     try {
       legacy =
         JSON.parse(
           localStorage.getItem(
             this.legacyStorageKey
-          ) || "{}"
+          ) ||
+          "{}"
         );
+
     } catch {
-      legacy = {};
+      legacy =
+        {};
     }
 
     const entries =
@@ -812,7 +1063,12 @@ export class HaIotMapCore {
         legacy
       )
         .filter(
-          ([, value]) =>
+          (
+            [
+              ,
+              value
+            ]
+          ) =>
             [
               "fixed",
               "floating",
@@ -822,7 +1078,9 @@ export class HaIotMapCore {
             )
         );
 
-    if (!entries.length) {
+    if (
+      !entries.length
+    ) {
       localStorage.setItem(
         this.migrationStorageKey,
         "1"
@@ -838,7 +1096,8 @@ export class HaIotMapCore {
         this.buildRawInventory()
       );
 
-    let migrated = 0;
+    let migrated =
+      0;
 
     for (
       const [
@@ -850,7 +1109,8 @@ export class HaIotMapCore {
       const item =
         inventory.find(
           x =>
-            x.id === itemId
+            x.id ===
+            itemId
         );
 
       if (!item) {
@@ -880,7 +1140,9 @@ export class HaIotMapCore {
         )
       ) {
         if (id) {
-          current.delete(id);
+          current.delete(
+            id
+          );
         }
       }
 
@@ -891,10 +1153,13 @@ export class HaIotMapCore {
       try {
         await this.writeLabels(
           item,
-          [...current]
+          [
+            ...current
+          ]
         );
 
         migrated++;
+
       } catch (err) {
         console.warn(
           "HA IoT Map migration warning",
@@ -918,7 +1183,10 @@ export class HaIotMapCore {
 
   isPhysicalCandidate(item) {
     const platforms =
-      (item.platforms || [])
+      (
+        item.platforms ||
+        []
+      )
         .map(
           p =>
             String(p)
@@ -1008,7 +1276,8 @@ export class HaIotMapCore {
       );
 
     if (
-      stored !== "auto"
+      stored !==
+      "auto"
     ) {
       return stored;
     }
@@ -1021,7 +1290,9 @@ export class HaIotMapCore {
       return "filtered";
     }
 
-    if (item.floating) {
+    if (
+      item.floating
+    ) {
       return "floating";
     }
 
@@ -1076,6 +1347,7 @@ export class HaIotMapCore {
           .push(
             entity
           );
+
       } else if (
         entity.entity_id?.startsWith(
           "device_tracker."
@@ -1087,7 +1359,8 @@ export class HaIotMapCore {
       }
     }
 
-    const inventory = [];
+    const inventory =
+      [];
 
     for (
       const device
@@ -1172,6 +1445,15 @@ export class HaIotMapCore {
           device.model ||
           "Unnamed device",
 
+        userName:
+          device.name_by_user ||
+          null,
+
+        originalName:
+          device.name ||
+          device.model ||
+          "Unnamed device",
+
         areaId,
 
         areaName:
@@ -1212,6 +1494,15 @@ export class HaIotMapCore {
 
         online:
           stateInfo.online,
+
+        lastSeenTs:
+          stateInfo.lastSeenTs,
+
+        offlineSinceTs:
+          stateInfo.offlineSinceTs,
+
+        lastSeenSource:
+          stateInfo.lastSeenSource,
 
         entityCount:
           deviceEntities.length,
@@ -1255,6 +1546,13 @@ export class HaIotMapCore {
         entity.platform ||
         "unknown";
 
+      const stateInfo =
+        this.getDeviceState(
+          [
+            entity
+          ]
+        );
+
       inventory.push({
         id:
           entity.entity_id,
@@ -1276,7 +1574,16 @@ export class HaIotMapCore {
             : [],
 
         name:
+          entity.name ||
           attrs.friendly_name ||
+          entity.original_name ||
+          entity.entity_id,
+
+        userName:
+          entity.name ||
+          null,
+
+        originalName:
           entity.original_name ||
           entity.entity_id,
 
@@ -1325,13 +1632,16 @@ export class HaIotMapCore {
           null,
 
         online:
-          ![
-            "not_home",
-            "unavailable",
-            "unknown"
-          ].includes(
-            state.state
-          ),
+          stateInfo.online,
+
+        lastSeenTs:
+          stateInfo.lastSeenTs,
+
+        offlineSinceTs:
+          stateInfo.offlineSinceTs,
+
+        lastSeenSource:
+          stateInfo.lastSeenSource,
 
         entityCount:
           1,
@@ -1373,7 +1683,9 @@ export class HaIotMapCore {
     }
 
     return compact
-      .match(/.{2}/g)
+      .match(
+        /.{2}/g
+      )
       .join(":");
   }
 
@@ -1395,10 +1707,13 @@ export class HaIotMapCore {
           item.mac
         );
 
-      if (!normalizedMac) {
+      if (
+        !normalizedMac
+      ) {
         noMac.push(
           item
         );
+
         continue;
       }
 
@@ -1457,7 +1772,8 @@ export class HaIotMapCore {
       );
 
       mergedAwayCount +=
-        items.length - 1;
+        items.length -
+        1;
     }
 
     mergedInventory.push(
@@ -1510,6 +1826,14 @@ export class HaIotMapCore {
         )
       )
     ];
+
+    const latestSeen =
+      this.maxTimestamp(
+        items.map(
+          item =>
+            item.lastSeenTs
+        )
+      );
 
     return {
       ...preferred,
@@ -1571,6 +1895,47 @@ export class HaIotMapCore {
             i.online
         ),
 
+      lastSeenTs:
+        latestSeen,
+
+      offlineSinceTs:
+        items.some(
+          i =>
+            i.online
+        )
+          ? null
+          : this.maxTimestamp(
+              items.map(
+                i =>
+                  i.offlineSinceTs
+              )
+            ),
+
+      lastSeenSource:
+        items.find(
+          i =>
+            i.lastSeenTs ===
+            latestSeen
+        )?.lastSeenSource ||
+        null,
+
+      userName:
+        items.find(
+          i =>
+            i.registryDeviceId &&
+            i.userName
+        )?.userName ||
+        items.find(
+          i =>
+            i.userName
+        )?.userName ||
+        null,
+
+      originalName:
+        preferred.originalName ||
+        preferred.name ||
+        "Unnamed device",
+
       entityCount:
         allEntityIds.length,
 
@@ -1600,7 +1965,8 @@ export class HaIotMapCore {
     const scored =
       items.map(
         item => {
-          let score = 0;
+          let score =
+            0;
 
           const name =
             item.name ||
@@ -1610,25 +1976,29 @@ export class HaIotMapCore {
             item.sourceType ===
             "device"
           ) {
-            score += 5;
+            score +=
+              5;
           }
 
           if (
             item.areaId
           ) {
-            score += 3;
+            score +=
+              3;
           }
 
           if (
             item.manufacturer
           ) {
-            score += 2;
+            score +=
+              2;
           }
 
           if (
             item.model
           ) {
-            score += 2;
+            score +=
+              2;
           }
 
           if (
@@ -1636,7 +2006,8 @@ export class HaIotMapCore {
               name
             )
           ) {
-            score += 3;
+            score +=
+              3;
           }
 
           return {
@@ -1661,6 +2032,150 @@ export class HaIotMapCore {
     );
   }
 
+  parseTimestamp(
+    value
+  ) {
+    if (
+      value === null ||
+      value === undefined ||
+      value === ""
+    ) {
+      return null;
+    }
+
+    if (
+      typeof value ===
+      "number"
+    ) {
+      if (
+        !Number.isFinite(
+          value
+        )
+      ) {
+        return null;
+      }
+
+      return value <
+        1e12
+          ? value *
+            1000
+          : value;
+    }
+
+    const text =
+      String(value)
+        .trim();
+
+    if (!text) {
+      return null;
+    }
+
+    if (
+      /^\d+(\.\d+)?$/.test(
+        text
+      )
+    ) {
+      const numeric =
+        Number(
+          text
+        );
+
+      if (
+        Number.isFinite(
+          numeric
+        )
+      ) {
+        return numeric <
+          1e12
+            ? numeric *
+              1000
+            : numeric;
+      }
+    }
+
+    const parsed =
+      Date.parse(
+        text
+      );
+
+    return Number.isFinite(
+      parsed
+    )
+      ? parsed
+      : null;
+  }
+
+  maxTimestamp(values) {
+    const valid =
+      values
+        .map(
+          value =>
+            this.parseTimestamp(
+              value
+            )
+        )
+        .filter(
+          value =>
+            Number.isFinite(
+              value
+            )
+        );
+
+    return valid.length
+      ? Math.max(
+          ...valid
+        )
+      : null;
+  }
+
+  getExplicitLastSeen(state) {
+    const attrs =
+      state?.attributes ||
+      {};
+
+    const keys = [
+      "last_seen",
+      "last_seen_at",
+      "last_activity",
+      "last_activity_at",
+      "last_active",
+      "last_connected",
+      "last_connected_at"
+    ];
+
+    for (
+      const key
+      of keys
+    ) {
+      const parsed =
+        this.parseTimestamp(
+          attrs[key]
+        );
+
+      if (
+        Number.isFinite(
+          parsed
+        )
+      ) {
+        return {
+          timestamp:
+            parsed,
+
+          source:
+            key
+        };
+      }
+    }
+
+    return {
+      timestamp:
+        null,
+
+      source:
+        null
+    };
+  }
+
   getDeviceState(
     entities
   ) {
@@ -1672,6 +2187,18 @@ export class HaIotMapCore {
 
     let trackerOnline =
       false;
+
+    const lastSeenCandidates =
+      [];
+
+    const explicitCandidates =
+      [];
+
+    const trackerOfflineSince =
+      [];
+
+    const genericOfflineSince =
+      [];
 
     for (
       const entity
@@ -1686,46 +2213,164 @@ export class HaIotMapCore {
         continue;
       }
 
+      const explicit =
+        this.getExplicitLastSeen(
+          state
+        );
+
+      if (
+        Number.isFinite(
+          explicit.timestamp
+        )
+      ) {
+        explicitCandidates.push({
+          timestamp:
+            explicit.timestamp,
+
+          source:
+            explicit.source
+        });
+
+        lastSeenCandidates.push(
+          explicit.timestamp
+        );
+      }
+
+      const stateUpdated =
+        this.parseTimestamp(
+          state.last_updated
+        );
+
+      const stateChanged =
+        this.parseTimestamp(
+          state.last_changed
+        );
+
+      if (
+        Number.isFinite(
+          stateUpdated
+        )
+      ) {
+        lastSeenCandidates.push(
+          stateUpdated
+        );
+
+      } else if (
+        Number.isFinite(
+          stateChanged
+        )
+      ) {
+        lastSeenCandidates.push(
+          stateChanged
+        );
+      }
+
+      const unavailable =
+        [
+          "unavailable",
+          "unknown"
+        ].includes(
+          state.state
+        );
+
       if (
         entity.entity_id.startsWith(
           "device_tracker."
         )
       ) {
-        tracker = true;
+        tracker =
+          true;
 
-        if (
+        const trackerIsOnline =
           ![
             "not_home",
             "unavailable",
             "unknown"
           ].includes(
             state.state
-          )
+          );
+
+        if (
+          trackerIsOnline
         ) {
           trackerOnline =
             true;
+
+        } else if (
+          Number.isFinite(
+            stateChanged
+          )
+        ) {
+          trackerOfflineSince.push(
+            stateChanged
+          );
         }
 
         continue;
       }
 
-      if (
-        ![
-          "unavailable",
-          "unknown"
-        ].includes(
-          state.state
+      if (!unavailable) {
+        usable =
+          true;
+
+      } else if (
+        Number.isFinite(
+          stateChanged
         )
       ) {
-        usable = true;
+        genericOfflineSince.push(
+          stateChanged
+        );
       }
     }
 
-    return {
-      online:
+    const online =
+      tracker
+        ? trackerOnline
+        : usable;
+
+    let offlineSinceTs =
+      null;
+
+    if (!online) {
+      offlineSinceTs =
         tracker
-          ? trackerOnline
-          : usable
+          ? this.maxTimestamp(
+              trackerOfflineSince
+            )
+          : this.maxTimestamp(
+              genericOfflineSince
+            );
+    }
+
+    const explicitLatest =
+      explicitCandidates
+        .sort(
+          (
+            a,
+            b
+          ) =>
+            b.timestamp -
+            a.timestamp
+        )[0] ||
+      null;
+
+    return {
+      online,
+
+      lastSeenTs:
+        explicitLatest
+          ? explicitLatest.timestamp
+          : this.maxTimestamp(
+              lastSeenCandidates
+            ),
+
+      offlineSinceTs,
+
+      lastSeenSource:
+        explicitLatest
+          ? `reported:${explicitLatest.source}`
+          : "ha_state"
     };
   }
 
@@ -1733,9 +2378,14 @@ export class HaIotMapCore {
     device,
     entities
   ) {
-    let mac = null;
-    let ip = null;
-    let hostname = null;
+    let mac =
+      null;
+
+    let ip =
+      null;
+
+    let hostname =
+      null;
 
     if (
       Array.isArray(
@@ -1764,7 +2414,8 @@ export class HaIotMapCore {
               .toLowerCase() ===
             "mac"
           ) {
-            mac = value;
+            mac =
+              value;
           }
         }
       }
@@ -1875,7 +2526,9 @@ export class HaIotMapCore {
         continue;
       }
 
-      if (!item.areaId) {
+      if (
+        !item.areaId
+      ) {
         groups.unassigned.push(
           item
         );
