@@ -191,9 +191,6 @@ class HaIotFloorplan extends HTMLElement {
           layout:
             legacyLayout || {},
 
-          /*
-           * NEW v0.4.1
-           */
           maxHeight:
             70
         }
@@ -248,9 +245,6 @@ class HaIotFloorplan extends HTMLElement {
                 : {};
 
 
-            /*
-             * v0.4 -> v0.4.1 migration
-             */
             if (
               !Number.isFinite(
                 floor.maxHeight
@@ -264,7 +258,7 @@ class HaIotFloorplan extends HTMLElement {
 
             floor.maxHeight =
               Math.min(
-                90,
+                150,
                 Math.max(
                   40,
                   floor.maxHeight
@@ -326,10 +320,6 @@ class HaIotFloorplan extends HTMLElement {
     }
 
 
-    /*
-     * Make sure every floor has
-     * a height setting.
-     */
     for (
       const floor
       of this._state.floors
@@ -344,6 +334,16 @@ class HaIotFloorplan extends HTMLElement {
         floor.maxHeight =
           70;
       }
+
+
+      floor.maxHeight =
+        Math.min(
+          150,
+          Math.max(
+            40,
+            floor.maxHeight
+          )
+        );
     }
 
 
@@ -475,9 +475,6 @@ class HaIotFloorplan extends HTMLElement {
       layout:
         {},
 
-      /*
-       * NEW floors default to 70vh.
-       */
       maxHeight:
         70
 
@@ -634,7 +631,7 @@ class HaIotFloorplan extends HTMLElement {
 
   /*
    * =================================================
-   * NEW v0.4.1 HEIGHT CONTROL
+   * HEIGHT CONTROL
    * =================================================
    */
 
@@ -655,7 +652,7 @@ class HaIotFloorplan extends HTMLElement {
 
     const numeric =
       Math.min(
-        90,
+        150,
         Math.max(
           40,
           Number(value) ||
@@ -667,11 +664,6 @@ class HaIotFloorplan extends HTMLElement {
     floor.maxHeight =
       numeric;
 
-
-    /*
-     * Update live without rebuilding
-     * the whole card.
-     */
 
     const floorplan =
       this.querySelector(
@@ -1912,7 +1904,7 @@ class HaIotFloorplan extends HTMLElement {
 
 
           /*
-           * NEW HEIGHT SLIDER
+           * HEIGHT SLIDER
            */
 
           .height-control {
@@ -1963,11 +1955,10 @@ class HaIotFloorplan extends HTMLElement {
 
           .height-slider {
 
-            flex:
-              1;
+            flex:1;
 
             max-width:
-              420px;
+              520px;
 
             accent-color:
               #00a8ff;
@@ -1977,7 +1968,7 @@ class HaIotFloorplan extends HTMLElement {
           .height-value {
 
             min-width:
-              48px;
+              58px;
 
             font-size:
               11px;
@@ -1991,9 +1982,6 @@ class HaIotFloorplan extends HTMLElement {
 
           /*
            * OUTER FLOORPLAN HOLDER
-           *
-           * Always full available width.
-           * Never horizontally scrolls.
            */
 
           .floorplan {
@@ -2033,14 +2021,7 @@ class HaIotFloorplan extends HTMLElement {
 
 
           /*
-           * CRITICAL v0.4.1 CHANGE
-           *
-           * Image and Area layer are both
-           * inside this stage.
-           *
-           * The Area percentages therefore
-           * reference the ACTUAL displayed
-           * image size rather than the full card.
+           * IMAGE + OVERLAY STAGE
            */
 
           .plan-stage {
@@ -2088,10 +2069,6 @@ class HaIotFloorplan extends HTMLElement {
             user-select:none;
           }
 
-
-          /*
-           * No-image canvas.
-           */
 
           .blank-stage {
 
@@ -2892,8 +2869,6 @@ class HaIotFloorplan extends HTMLElement {
           </div>
 
 
-          <!-- FLOOR TABS -->
-
           <div class="floor-tabs">
 
             ${
@@ -3049,7 +3024,7 @@ class HaIotFloorplan extends HTMLElement {
                     class="height-slider"
                     type="range"
                     min="40"
-                    max="90"
+                    max="150"
                     step="5"
                     value="${maxHeight}"
                   >
@@ -3061,7 +3036,7 @@ class HaIotFloorplan extends HTMLElement {
                       opacity:.45;
                     "
                   >
-                    90
+                    150
                   </span>
 
 
@@ -3077,8 +3052,6 @@ class HaIotFloorplan extends HTMLElement {
               : ""
           }
 
-
-          <!-- FLOORPLAN -->
 
           <div
             id="floorplan"
@@ -3143,8 +3116,6 @@ class HaIotFloorplan extends HTMLElement {
           </div>
 
 
-          <!-- FLOATING -->
-
           <div class="floating">
 
             <div class="floating-title">
@@ -3172,7 +3143,7 @@ class HaIotFloorplan extends HTMLElement {
 
           <div class="footer">
 
-            HA IoT Floorplan v0.4.1
+            HA IoT Floorplan v0.4.3
             •
             ${
               this._escapeHtml(
@@ -3924,10 +3895,6 @@ class HaIotFloorplan extends HTMLElement {
   _attachHandlers() {
 
 
-    /*
-     * FLOOR TABS
-     */
-
     for (
       const tab
       of this.querySelectorAll(
@@ -4236,13 +4203,6 @@ class HaIotFloorplan extends HTMLElement {
 
 
   _getCanvas() {
-
-    /*
-     * IMPORTANT:
-     *
-     * We now calculate geometry against
-     * plan-stage, NOT full-width floorplan.
-     */
 
     return this.querySelector(
       "#plan-stage"
@@ -4785,7 +4745,7 @@ if (
 
 
 console.info(
-  "%c HA IoT Floorplan %c v0.4.1 ",
+  "%c HA IoT Floorplan %c v0.4.3 ",
   "background:#00a8ff;color:white;font-weight:bold;",
   "background:#333;color:white;"
 );
