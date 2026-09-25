@@ -1,10 +1,9 @@
 import {
   HaIotMapCore
-} from "./ha-iot-map-core.js?v=1";
+} from "./ha-iot-map-core.js?v=3";
 
 
-class HaIotMapManager
-  extends HTMLElement {
+class HaIotMapManager extends HTMLElement {
 
   constructor() {
     super();
@@ -30,10 +29,12 @@ class HaIotMapManager
       5000;
   }
 
+
   setConfig(config) {
     this._config =
       config || {};
   }
+
 
   set hass(hass) {
     this._core.setHass(
@@ -70,6 +71,7 @@ class HaIotMapManager
     }
   }
 
+
   async _initialize() {
     this._loading =
       true;
@@ -89,11 +91,15 @@ class HaIotMapManager
         Date.now();
 
       this._render();
+
     } catch (err) {
       console.error(
         "HA IoT Map Manager initialization failed",
         err
       );
+
+      this._loading =
+        false;
 
       this.innerHTML = `
         <ha-card header="HA IoT Map Manager">
@@ -104,7 +110,9 @@ class HaIotMapManager
               color:var(--error-color);
             "
           >
+
             Initialization failed.
+
             <br><br>
 
             ${this._escapeHtml(
@@ -119,6 +127,7 @@ class HaIotMapManager
     }
   }
 
+
   _toggleAutoUpdate() {
     this._autoUpdate =
       !this._autoUpdate;
@@ -129,13 +138,23 @@ class HaIotMapManager
     this._render();
   }
 
+
   async _manualRefresh() {
-    await this._core.reloadRegistries();
+    try {
+      await this._core.reloadRegistries();
 
-    await this._core.ensureSharedLabels();
+      await this._core.ensureSharedLabels();
 
-    this._render();
+      this._render();
+
+    } catch (err) {
+      console.error(
+        "HA IoT Map Manager refresh failed",
+        err
+      );
+    }
   }
+
 
   async _changeArea(
     itemId,
@@ -148,6 +167,7 @@ class HaIotMapManager
       );
 
       this._render();
+
     } catch (err) {
       console.error(
         "Area update failed",
@@ -163,6 +183,7 @@ class HaIotMapManager
     }
   }
 
+
   async _changeClassification(
     itemId,
     value
@@ -174,6 +195,7 @@ class HaIotMapManager
       );
 
       this._render();
+
     } catch (err) {
       console.error(
         "Classification update failed",
@@ -189,6 +211,7 @@ class HaIotMapManager
     }
   }
 
+
   async _changeCategory(
     itemId,
     value
@@ -200,6 +223,7 @@ class HaIotMapManager
       );
 
       this._render();
+
     } catch (err) {
       console.error(
         "Category update failed",
@@ -214,6 +238,7 @@ class HaIotMapManager
       this._render();
     }
   }
+
 
   _render() {
     if (
@@ -259,6 +284,7 @@ class HaIotMapManager
             padding:18px;
           }
 
+
           .iot-header {
             display:flex;
             justify-content:space-between;
@@ -267,15 +293,18 @@ class HaIotMapManager
             margin-bottom:16px;
           }
 
+
           .iot-title {
             font-size:24px;
             font-weight:500;
           }
 
+
           .controls {
             display:flex;
             gap:8px;
           }
+
 
           .control-button {
             border:
@@ -301,6 +330,7 @@ class HaIotMapManager
             cursor:pointer;
           }
 
+
           .auto-on {
             border-color:
               var(
@@ -308,6 +338,7 @@ class HaIotMapManager
                 #4caf50
               );
           }
+
 
           .setup {
             margin-bottom:
@@ -335,6 +366,7 @@ class HaIotMapManager
               12px;
           }
 
+
           .summary {
             display:grid;
 
@@ -348,8 +380,11 @@ class HaIotMapManager
               );
 
             gap:8px;
-            margin-bottom:24px;
+
+            margin-bottom:
+              24px;
           }
+
 
           .summary-box {
             padding:12px;
@@ -363,6 +398,7 @@ class HaIotMapManager
               );
           }
 
+
           .summary-number {
             font-size:
               24px;
@@ -370,6 +406,7 @@ class HaIotMapManager
             font-weight:
               600;
           }
+
 
           .summary-label {
             font-size:
@@ -379,10 +416,12 @@ class HaIotMapManager
               .7;
           }
 
+
           .section {
             margin-top:
               24px;
           }
+
 
           .section-title {
             font-size:
@@ -391,6 +430,7 @@ class HaIotMapManager
             font-weight:
               600;
           }
+
 
           .area-title {
             font-size:
@@ -402,6 +442,7 @@ class HaIotMapManager
             margin-top:
               18px;
           }
+
 
           .device {
             display:grid;
@@ -430,6 +471,7 @@ class HaIotMapManager
               );
           }
 
+
           .status {
             width:
               10px;
@@ -441,6 +483,7 @@ class HaIotMapManager
               50%;
           }
 
+
           .online {
             background:
               var(
@@ -449,6 +492,7 @@ class HaIotMapManager
               );
           }
 
+
           .offline {
             background:
               var(
@@ -456,11 +500,13 @@ class HaIotMapManager
               );
           }
 
+
           .device-head {
             display:flex;
             align-items:center;
             gap:10px;
           }
+
 
           .device-icon {
             --mdc-icon-size:
@@ -470,10 +516,12 @@ class HaIotMapManager
               .9;
           }
 
+
           .device-name {
             font-weight:
               600;
           }
+
 
           .category-auto {
             font-size:
@@ -485,6 +533,7 @@ class HaIotMapManager
             margin-left:
               6px;
           }
+
 
           .device-details {
             font-size:
@@ -500,11 +549,13 @@ class HaIotMapManager
               1.5;
           }
 
+
           .device-controls {
             display:flex;
             flex-direction:column;
             gap:8px;
           }
+
 
           .control-field {
             display:grid;
@@ -519,6 +570,7 @@ class HaIotMapManager
               center;
           }
 
+
           .field-label {
             font-size:
               11px;
@@ -532,6 +584,7 @@ class HaIotMapManager
             letter-spacing:
               .04em;
           }
+
 
           .select-control {
             width:
@@ -563,10 +616,15 @@ class HaIotMapManager
               );
           }
 
+
           .select-control:disabled {
             opacity:
               .45;
+
+            cursor:
+              not-allowed;
           }
+
 
           .area-select.unassigned {
             border-color:
@@ -575,6 +633,7 @@ class HaIotMapManager
                 #ff9800
               );
           }
+
 
           .source {
             margin-top:
@@ -590,6 +649,7 @@ class HaIotMapManager
               .45;
           }
 
+
           .empty {
             opacity:
               .55;
@@ -600,6 +660,7 @@ class HaIotMapManager
             padding:
               10px;
           }
+
 
           .special-section {
             margin-top:
@@ -615,10 +676,12 @@ class HaIotMapManager
               );
           }
 
+
           details {
             margin-top:
               8px;
           }
+
 
           summary {
             cursor:
@@ -627,6 +690,7 @@ class HaIotMapManager
             font-weight:
               600;
           }
+
 
           @media (
             max-width:
@@ -641,6 +705,7 @@ class HaIotMapManager
                 flex-start;
             }
 
+
             .device {
               grid-template-columns:
                 14px
@@ -649,6 +714,7 @@ class HaIotMapManager
                   1fr
                 );
             }
+
 
             .device-controls {
               grid-column:
@@ -667,13 +733,16 @@ class HaIotMapManager
 
         </style>
 
+
         <div class="iot-wrap">
+
 
           <div class="iot-header">
 
             <div class="iot-title">
               HA IoT Map Manager
             </div>
+
 
             <div class="controls">
 
@@ -688,13 +757,16 @@ class HaIotMapManager
                 "
                 id="iot-auto-update"
               >
+
                 Auto update:
                 ${
                   this._autoUpdate
                     ? "ON"
                     : "OFF"
                 }
+
               </button>
+
 
               <button
                 class="control-button"
@@ -707,14 +779,18 @@ class HaIotMapManager
 
           </div>
 
+
           <div class="setup">
+
             ${
               this._escapeHtml(
                 this._core.setupMessage ||
                 "Shared HA storage ready"
               )
             }
+
           </div>
+
 
           <div class="summary">
 
@@ -725,12 +801,14 @@ class HaIotMapManager
               )
             }
 
+
             ${
               this._summaryBox(
                 assignedCount,
                 "Assigned"
               )
             }
+
 
             ${
               this._summaryBox(
@@ -739,12 +817,14 @@ class HaIotMapManager
               )
             }
 
+
             ${
               this._summaryBox(
                 groups.floating.length,
                 "Floating"
               )
             }
+
 
             ${
               this._summaryBox(
@@ -753,12 +833,14 @@ class HaIotMapManager
               )
             }
 
+
             ${
               this._summaryBox(
                 groups.filtered.length,
                 "Filtered"
               )
             }
+
 
             ${
               this._summaryBox(
@@ -769,11 +851,13 @@ class HaIotMapManager
 
           </div>
 
+
           ${
             this._renderAssigned(
               groups
             )
           }
+
 
           ${
             this._renderSection(
@@ -782,12 +866,14 @@ class HaIotMapManager
             )
           }
 
+
           ${
             this._renderSection(
               "Floating / Mobile",
               groups.floating
             )
           }
+
 
           ${
             this._renderCollapsedSection(
@@ -796,12 +882,14 @@ class HaIotMapManager
             )
           }
 
+
           ${
             this._renderCollapsedSection(
               "Filtered / software-only",
               groups.filtered
             )
           }
+
 
           <div
             style="
@@ -810,8 +898,10 @@ class HaIotMapManager
               font-size:11px;
             "
           >
-            HA IoT Map Manager v0.9
+
+            HA IoT Map Manager v0.9.1
             • Core v0.9
+
           </div>
 
         </div>
@@ -822,7 +912,9 @@ class HaIotMapManager
     this._attachHandlers();
   }
 
+
   _attachHandlers() {
+
     for (
       const select
       of this.querySelectorAll(
@@ -832,6 +924,7 @@ class HaIotMapManager
       select.addEventListener(
         "change",
         event => {
+
           event.target.disabled =
             true;
 
@@ -843,6 +936,7 @@ class HaIotMapManager
       );
     }
 
+
     for (
       const select
       of this.querySelectorAll(
@@ -852,6 +946,7 @@ class HaIotMapManager
       select.addEventListener(
         "change",
         event => {
+
           event.target.disabled =
             true;
 
@@ -863,6 +958,7 @@ class HaIotMapManager
       );
     }
 
+
     for (
       const select
       of this.querySelectorAll(
@@ -872,6 +968,7 @@ class HaIotMapManager
       select.addEventListener(
         "change",
         event => {
+
           event.target.disabled =
             true;
 
@@ -883,6 +980,7 @@ class HaIotMapManager
       );
     }
 
+
     this.querySelector(
       "#iot-auto-update"
     )?.addEventListener(
@@ -890,6 +988,7 @@ class HaIotMapManager
       () =>
         this._toggleAutoUpdate()
     );
+
 
     this.querySelector(
       "#iot-refresh-now"
@@ -900,19 +999,24 @@ class HaIotMapManager
     );
   }
 
+
   _renderDevice(device) {
+
     const category =
       this._core.getResolvedCategory(
         device
       );
+
 
     const icon =
       this._core.categoryIcon(
         category
       );
 
+
     const networkParts =
       [];
+
 
     if (
       device.ip
@@ -924,6 +1028,7 @@ class HaIotMapManager
       );
     }
 
+
     if (
       device.mac
     ) {
@@ -933,6 +1038,7 @@ class HaIotMapManager
         )
       );
     }
+
 
     if (
       device.hostname
@@ -944,8 +1050,10 @@ class HaIotMapManager
       );
     }
 
+
     const hardwareParts =
       [];
+
 
     if (
       device.manufacturer
@@ -957,6 +1065,7 @@ class HaIotMapManager
       );
     }
 
+
     if (
       device.model
     ) {
@@ -966,6 +1075,7 @@ class HaIotMapManager
         )
       );
     }
+
 
     return `
       <div class="device">
@@ -981,6 +1091,7 @@ class HaIotMapManager
           "
         ></div>
 
+
         <div>
 
           <div class="device-head">
@@ -994,15 +1105,20 @@ class HaIotMapManager
               }"
             ></ha-icon>
 
+
             <div class="device-name">
+
               ${
                 this._escapeHtml(
                   device.name
                 )
               }
+
             </div>
 
+
             <span class="category-auto">
+
               ${
                 this._escapeHtml(
                   this._core.categoryTitle(
@@ -1010,9 +1126,11 @@ class HaIotMapManager
                   )
                 )
               }
+
             </span>
 
           </div>
+
 
           <div class="device-details">
 
@@ -1025,6 +1143,7 @@ class HaIotMapManager
                 : ""
             }
 
+
             ${
               hardwareParts.length
                 ? hardwareParts.join(
@@ -1034,9 +1153,11 @@ class HaIotMapManager
                 : ""
             }
 
+
             ${
               device.entityCount
             }
+
             entit${
               device.entityCount ===
               1
@@ -1048,7 +1169,9 @@ class HaIotMapManager
 
         </div>
 
+
         <div class="device-controls">
+
 
           <div class="control-field">
 
@@ -1064,6 +1187,7 @@ class HaIotMapManager
 
           </div>
 
+
           <div class="control-field">
 
             <div class="field-label">
@@ -1077,6 +1201,7 @@ class HaIotMapManager
             }
 
           </div>
+
 
           <div class="control-field">
 
@@ -1092,7 +1217,9 @@ class HaIotMapManager
 
           </div>
 
+
           <div class="source">
+
             ${
               this._escapeHtml(
                 device.platforms.join(
@@ -1100,6 +1227,7 @@ class HaIotMapManager
                 )
               )
             }
+
           </div>
 
         </div>
@@ -1108,18 +1236,22 @@ class HaIotMapManager
     `;
   }
 
+
   _renderCategorySelector(
     device
   ) {
+
     const stored =
       this._core.getStoredCategory(
         device
       );
 
+
     const resolved =
       this._core.getResolvedCategory(
         device
       );
+
 
     return `
       <select
@@ -1145,6 +1277,7 @@ class HaIotMapManager
               : ""
           }
         >
+
           Auto (${
             this._escapeHtml(
               this._core.categoryTitle(
@@ -1152,7 +1285,9 @@ class HaIotMapManager
               )
             )
           })
+
         </option>
+
 
         ${
           Object.entries(
@@ -1165,6 +1300,7 @@ class HaIotMapManager
                   def
                 ]
               ) => `
+
                 <option
                   value="${key}"
                   ${
@@ -1174,12 +1310,15 @@ class HaIotMapManager
                       : ""
                   }
                 >
+
                   ${
                     this._escapeHtml(
                       def.title
                     )
                   }
+
                 </option>
+
               `
             )
             .join("")
@@ -1189,13 +1328,16 @@ class HaIotMapManager
     `;
   }
 
+
   _renderClassificationSelector(
     device
   ) {
+
     const stored =
       this._core.getStoredClassification(
         device
       );
+
 
     return `
       <select
@@ -1224,6 +1366,7 @@ class HaIotMapManager
           Auto
         </option>
 
+
         <option
           value="fixed"
           ${
@@ -1236,6 +1379,7 @@ class HaIotMapManager
           Fixed
         </option>
 
+
         <option
           value="floating"
           ${
@@ -1247,6 +1391,7 @@ class HaIotMapManager
         >
           Floating
         </option>
+
 
         <option
           value="ignored"
@@ -1264,9 +1409,11 @@ class HaIotMapManager
     `;
   }
 
+
   _renderAreaSelector(
     device
   ) {
+
     const sortedAreas =
       [
         ...this._core.areas
@@ -1280,6 +1427,7 @@ class HaIotMapManager
               b.name
             )
         );
+
 
     return `
       <select
@@ -1315,10 +1463,12 @@ class HaIotMapManager
           Unassigned
         </option>
 
+
         ${
           sortedAreas
             .map(
               area => `
+
                 <option
                   value="${
                     this._escapeHtml(
@@ -1332,12 +1482,15 @@ class HaIotMapManager
                       : ""
                   }
                 >
+
                   ${
                     this._escapeHtml(
                       area.name
                     )
                   }
+
                 </option>
+
               `
             )
             .join("")
@@ -1347,7 +1500,11 @@ class HaIotMapManager
     `;
   }
 
-  _renderAssigned(groups) {
+
+  _renderAssigned(
+    groups
+  ) {
+
     const areas =
       [
         ...groups.areas.entries()
@@ -1362,12 +1519,14 @@ class HaIotMapManager
             )
         );
 
+
     return `
       <div class="section">
 
         <div class="section-title">
           Assigned
         </div>
+
 
         ${
           areas.length
@@ -1381,19 +1540,22 @@ class HaIotMapManager
                   ) => `
 
                     <div class="area-title">
+
                       ${
                         this._escapeHtml(
                           area
                         )
                       }
+
                     </div>
+
 
                     ${
                       devices
                         .map(
-                          d =>
+                          device =>
                             this._renderDevice(
-                              d
+                              device
                             )
                         )
                         .join("")
@@ -1413,28 +1575,33 @@ class HaIotMapManager
     `;
   }
 
+
   _renderSection(
     title,
     devices
   ) {
+
     return `
       <div class="section">
 
         <div class="section-title">
+
           ${
             this._escapeHtml(
               title
             )
           }
+
         </div>
+
 
         ${
           devices.length
             ? devices
                 .map(
-                  d =>
+                  device =>
                     this._renderDevice(
-                      d
+                      device
                     )
                 )
                 .join("")
@@ -1449,31 +1616,37 @@ class HaIotMapManager
     `;
   }
 
+
   _renderCollapsedSection(
     title,
     devices
   ) {
+
     return `
       <div class="special-section">
 
         <details>
 
           <summary>
+
             ${
               this._escapeHtml(
                 title
               )
             }
+
             (${devices.length})
+
           </summary>
+
 
           ${
             devices.length
               ? devices
                   .map(
-                    d =>
+                    device =>
                       this._renderDevice(
-                        d
+                        device
                       )
                   )
                   .join("")
@@ -1490,10 +1663,12 @@ class HaIotMapManager
     `;
   }
 
+
   _summaryBox(
     number,
     label
   ) {
+
     return `
       <div class="summary-box">
 
@@ -1502,30 +1677,38 @@ class HaIotMapManager
         </div>
 
         <div class="summary-label">
+
           ${
             this._escapeHtml(
               label
             )
           }
+
         </div>
 
       </div>
     `;
   }
 
+
   _renderLoading() {
+
     this.innerHTML = `
       <ha-card header="HA IoT Map Manager">
 
         <div style="padding:16px">
+
           Loading shared IoT core...
+
         </div>
 
       </ha-card>
     `;
   }
 
+
   _escapeHtml(value) {
+
     return String(
       value ?? ""
     )
@@ -1551,9 +1734,11 @@ class HaIotMapManager
       );
   }
 
+
   getCardSize() {
     return 8;
   }
+
 
   getGridOptions() {
     return {
@@ -1564,39 +1749,54 @@ class HaIotMapManager
         6
     };
   }
+
 }
 
 
+/*
+ * Primary v0.9+ custom element.
+ */
 if (
   !customElements.get(
     "ha-iot-map-manager"
   )
 ) {
+
   customElements.define(
     "ha-iot-map-manager",
     HaIotMapManager
   );
+
 }
 
 
 /*
  * Backward compatibility.
  *
- * Your existing dashboards using:
+ * IMPORTANT:
+ * Browsers do NOT allow the same constructor
+ * to be registered under two custom-element
+ * names.
  *
- * type: custom:ha-iot-map
- *
- * continue to work.
+ * Therefore the old ha-iot-map name uses
+ * a tiny subclass.
  */
+class HaIotMapLegacy
+  extends HaIotMapManager {
+}
+
+
 if (
   !customElements.get(
     "ha-iot-map"
   )
 ) {
+
   customElements.define(
     "ha-iot-map",
-    HaIotMapManager
+    HaIotMapLegacy
   );
+
 }
 
 
@@ -1612,7 +1812,9 @@ if (
       "ha-iot-map-manager"
   )
 ) {
+
   window.customCards.push({
+
     type:
       "ha-iot-map-manager",
 
@@ -1621,12 +1823,14 @@ if (
 
     description:
       "Inventory and staging manager for HA IoT Map"
+
   });
+
 }
 
 
 console.info(
-  "%c HA IoT Map Manager %c v0.9 ",
+  "%c HA IoT Map Manager %c v0.9.1 ",
   "background:#03a9f4;color:white;font-weight:bold;",
   "background:#333;color:white;"
 );
