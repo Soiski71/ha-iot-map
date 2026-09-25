@@ -37,10 +37,32 @@ class HaIotFloorplan extends HTMLElement {
     this._backgroundBlobs = {};
 
     this._currentData = null;
+
+    this._boundWindowResize =
+      () => this._applyPlanSize();
+  }
+
+
+  connectedCallback() {
+
+    window.addEventListener(
+      "resize",
+      this._boundWindowResize
+    );
+  }
+
+
+  disconnectedCallback() {
+
+    window.removeEventListener(
+      "resize",
+      this._boundWindowResize
+    );
   }
 
 
   setConfig(config) {
+
     this._config =
       config || {};
   }
@@ -56,9 +78,11 @@ class HaIotFloorplan extends HTMLElement {
       !this._loaded &&
       !this._loading
     ) {
+
       this._initialize();
       return;
     }
+
 
     if (
       !this._loaded ||
@@ -69,14 +93,17 @@ class HaIotFloorplan extends HTMLElement {
       return;
     }
 
+
     const now =
       Date.now();
+
 
     if (
       now -
       this._lastRender >
       1500
     ) {
+
       this._lastRender =
         now;
 
@@ -91,21 +118,26 @@ class HaIotFloorplan extends HTMLElement {
 
     this._renderLoading();
 
+
     try {
 
       await this._core
         .reloadRegistries();
 
+
       this._ensureFloorState();
+
 
       await this
         ._loadAllBackgrounds();
+
 
       this._loaded = true;
       this._loading = false;
 
       this._lastRender =
         Date.now();
+
 
       this._render();
 
@@ -116,7 +148,9 @@ class HaIotFloorplan extends HTMLElement {
         err
       );
 
+
       this._loading = false;
+
 
       this.innerHTML = `
         <ha-card header="HA IoT Floorplan">
@@ -127,12 +161,16 @@ class HaIotFloorplan extends HTMLElement {
               color:var(--error-color);
             "
           >
+
             Initialization failed.
+
             <br><br>
+
             ${this._escapeHtml(
               err?.message ||
               String(err)
             )}
+
           </div>
 
         </ha-card>
@@ -151,6 +189,7 @@ class HaIotFloorplan extends HTMLElement {
   _defaultState() {
 
     let legacyLayout = {};
+
 
     try {
 
@@ -191,8 +230,13 @@ class HaIotFloorplan extends HTMLElement {
           layout:
             legacyLayout || {},
 
-          maxHeight:
-            70
+          /*
+           * v0.4.4
+           *
+           * 100 = automatic fit
+           */
+          sizePercent:
+            100
         }
 
       ]
@@ -209,12 +253,14 @@ class HaIotFloorplan extends HTMLElement {
           this._stateKey
         );
 
+
       if (raw) {
 
         const state =
           JSON.parse(
             raw
           );
+
 
         if (
           state &&
@@ -245,26 +291,44 @@ class HaIotFloorplan extends HTMLElement {
                 : {};
 
 
+            /*
+             * Migrate previous maxHeight
+             * value to new sizePercent.
+             */
+
             if (
               !Number.isFinite(
-                floor.maxHeight
+                floor.sizePercent
               )
             ) {
 
-              floor.maxHeight =
-                70;
+              if (
+                Number.isFinite(
+                  floor.maxHeight
+                )
+              ) {
+
+                floor.sizePercent =
+                  floor.maxHeight;
+
+              } else {
+
+                floor.sizePercent =
+                  100;
+              }
             }
 
 
-            floor.maxHeight =
+            floor.sizePercent =
               Math.min(
                 150,
                 Math.max(
                   40,
-                  floor.maxHeight
+                  floor.sizePercent
                 )
               );
           }
+
 
           return state;
         }
@@ -327,21 +391,25 @@ class HaIotFloorplan extends HTMLElement {
 
       if (
         !Number.isFinite(
-          floor.maxHeight
+          floor.sizePercent
         )
       ) {
 
-        floor.maxHeight =
-          70;
+        floor.sizePercent =
+          Number.isFinite(
+            floor.maxHeight
+          )
+            ? floor.maxHeight
+            : 100;
       }
 
 
-      floor.maxHeight =
+      floor.sizePercent =
         Math.min(
           150,
           Math.max(
             40,
-            floor.maxHeight
+            floor.sizePercent
           )
         );
     }
@@ -427,6 +495,7 @@ class HaIotFloorplan extends HTMLElement {
     this._state.activeFloorId =
       floorId;
 
+
     this._activeGroup =
       null;
 
@@ -475,8 +544,8 @@ class HaIotFloorplan extends HTMLElement {
       layout:
         {},
 
-      maxHeight:
-        70
+      sizePercent:
+        100
 
     });
 
@@ -631,12 +700,12 @@ class HaIotFloorplan extends HTMLElement {
 
   /*
    * =================================================
-   * HEIGHT CONTROL
+   * FLOORPLAN SIZE
    * =================================================
    */
 
 
-  _setFloorHeight(
+  _setFloorSize(
     value,
     save = true
   ) {
@@ -656,16 +725,45 @@ class HaIotFloorplan extends HTMLElement {
         Math.max(
           40,
           Number(value) ||
-          70
+          100
         )
       );
 
 
-    floor.maxHeight =
+    floor.sizePercent =
       numeric;
 
 
-    const floorplan =
+    const label =
+      this.querySelector(
+        "#size-value"
+      );
+
+
+    if (label) {
+
+      label.textContent =
+        `${numeric}%`;
+    }
+
+
+    this._applyPlanSize();
+
+
+    if (save) {
+
+      this._saveState();
+    }
+  }
+
+
+  _applyPlanSize() {
+
+    const floor =
+      this._activeFloor();
+
+
+    const holder =
       this.querySelector(
         "#floorplan"
       );
@@ -677,52 +775,186 @@ class HaIotFloorplan extends HTMLElement {
       );
 
 
+    if (
+      !floor ||
+      !holder ||
+      !stage
+    ) {
+      return;
+    }
+
+
+    const sizePercent =
+      floor.sizePercent ||
+      100;
+
+
     const image =
       this.querySelector(
         ".floorplan-image"
       );
 
 
-    if (floorplan) {
+    /*
+     * Use image natural dimensions.
+     *
+     * Blank canvas uses a standard
+     * 16:9 virtual image.
+     */
 
-      floorplan.style
-        .setProperty(
-          "--plan-max-height",
-          `${numeric}vh`
-        );
-    }
+    let naturalWidth =
+      1600;
 
-
-    if (stage) {
-
-      stage.style.maxHeight =
-        `${numeric}vh`;
-    }
+    let naturalHeight =
+      900;
 
 
     if (image) {
 
-      image.style.maxHeight =
-        `${numeric}vh`;
+      if (
+        !image.complete ||
+        !image.naturalWidth ||
+        !image.naturalHeight
+      ) {
+        return;
+      }
+
+
+      naturalWidth =
+        image.naturalWidth;
+
+
+      naturalHeight =
+        image.naturalHeight;
     }
 
 
-    const label =
-      this.querySelector(
-        "#height-value"
+    /*
+     * Available width is always
+     * the hard upper limit.
+     */
+
+    const availableWidth =
+      holder.clientWidth;
+
+
+    if (
+      !availableWidth
+    ) {
+      return;
+    }
+
+
+    /*
+     * 100% means:
+     *
+     * Fit inside:
+     * - available card width
+     * - one browser viewport height
+     *
+     * 150% may exceed viewport height,
+     * but NEVER available card width.
+     */
+
+    const viewportHeight =
+      Math.max(
+        1,
+        window.innerHeight ||
+        document.documentElement
+          .clientHeight ||
+        900
       );
 
 
-    if (label) {
+    const widthFitScale =
+      availableWidth /
+      naturalWidth;
 
-      label.textContent =
-        `${numeric} vh`;
+
+    const viewportFitScale =
+      viewportHeight /
+      naturalHeight;
+
+
+    const baseScale =
+      Math.min(
+        widthFitScale,
+        viewportFitScale
+      );
+
+
+    const requestedScale =
+      baseScale *
+      (
+        sizePercent /
+        100
+      );
+
+
+    /*
+     * Width is the absolute ceiling.
+     */
+
+    const finalScale =
+      Math.min(
+        requestedScale,
+        widthFitScale
+      );
+
+
+    const renderWidth =
+      naturalWidth *
+      finalScale;
+
+
+    const renderHeight =
+      naturalHeight *
+      finalScale;
+
+
+    stage.style.width =
+      `${renderWidth}px`;
+
+
+    stage.style.height =
+      `${renderHeight}px`;
+
+
+    if (image) {
+
+      image.style.width =
+        "100%";
+
+
+      image.style.height =
+        "100%";
     }
 
 
-    if (save) {
+    const widthLimited =
+      requestedScale >=
+      widthFitScale -
+      0.0001;
 
-      this._saveState();
+
+    const status =
+      this.querySelector(
+        "#size-status"
+      );
+
+
+    if (status) {
+
+      status.textContent =
+        widthLimited
+
+          ? "Width limit reached"
+
+          : `${Math.round(
+              renderWidth
+            )} × ${Math.round(
+              renderHeight
+            )} px`;
     }
   }
 
@@ -1704,9 +1936,9 @@ class HaIotFloorplan extends HTMLElement {
       this._getBackground();
 
 
-    const maxHeight =
-      data.floor.maxHeight ||
-      70;
+    const sizePercent =
+      data.floor.sizePercent ||
+      100;
 
 
     const unassignedCount =
@@ -1729,22 +1961,32 @@ class HaIotFloorplan extends HTMLElement {
 
 
           .header {
+
             display:flex;
-            justify-content:space-between;
+
+            justify-content:
+              space-between;
+
             align-items:center;
+
             gap:14px;
+
             margin-bottom:12px;
           }
 
 
           .title {
+
             font-size:24px;
+
             font-weight:500;
           }
 
 
           .subtitle {
+
             font-size:12px;
+
             opacity:.6;
           }
 
@@ -1793,17 +2035,16 @@ class HaIotFloorplan extends HTMLElement {
 
 
           .floor-tabs {
+
             margin-bottom:12px;
           }
 
 
           .floor-tab {
 
-            border-radius:
-              999px;
+            border-radius:999px;
 
-            font-size:
-              12px;
+            font-size:12px;
           }
 
 
@@ -1855,6 +2096,7 @@ class HaIotFloorplan extends HTMLElement {
 
 
           .floor-tools {
+
             margin-left:auto;
           }
 
@@ -1887,8 +2129,7 @@ class HaIotFloorplan extends HTMLElement {
             padding:
               8px 10px;
 
-            border-radius:
-              7px;
+            border-radius:7px;
 
             background:
               rgba(
@@ -1898,16 +2139,15 @@ class HaIotFloorplan extends HTMLElement {
                 .10
               );
 
-            font-size:
-              11px;
+            font-size:11px;
           }
 
 
           /*
-           * HEIGHT SLIDER
+           * FLOORPLAN SIZE CONTROL
            */
 
-          .height-control {
+          .size-control {
 
             display:flex;
 
@@ -1921,8 +2161,7 @@ class HaIotFloorplan extends HTMLElement {
             padding:
               9px 11px;
 
-            border-radius:
-              8px;
+            border-radius:8px;
 
             background:
               rgba(
@@ -1940,38 +2179,32 @@ class HaIotFloorplan extends HTMLElement {
           }
 
 
-          .height-label {
+          .size-label {
 
-            min-width:
-              105px;
+            min-width:105px;
 
-            font-size:
-              11px;
+            font-size:11px;
 
-            font-weight:
-              600;
+            font-weight:600;
           }
 
 
-          .height-slider {
+          .size-slider {
 
             flex:1;
 
-            max-width:
-              520px;
+            max-width:520px;
 
             accent-color:
               #00a8ff;
           }
 
 
-          .height-value {
+          .size-value {
 
-            min-width:
-              58px;
+            min-width:45px;
 
-            font-size:
-              11px;
+            font-size:11px;
 
             color:
               #00a8ff;
@@ -1980,23 +2213,25 @@ class HaIotFloorplan extends HTMLElement {
           }
 
 
+          .size-status {
+
+            min-width:120px;
+
+            font-size:10px;
+
+            opacity:.45;
+          }
+
+
           /*
-           * OUTER FLOORPLAN HOLDER
+           * OUTER HOLDER
            */
 
           .floorplan {
 
-            --plan-max-height:
-              ${maxHeight}vh;
-
             position:relative;
 
             width:100%;
-
-            max-height:
-              var(
-                --plan-max-height
-              );
 
             overflow:hidden;
 
@@ -2004,7 +2239,7 @@ class HaIotFloorplan extends HTMLElement {
 
             justify-content:center;
 
-            align-items:center;
+            align-items:flex-start;
 
             border:
               1px solid
@@ -2012,34 +2247,24 @@ class HaIotFloorplan extends HTMLElement {
                 --divider-color
               );
 
-            border-radius:
-              12px;
+            border-radius:12px;
 
-            background:
-              #05090f;
+            background:#05090f;
           }
 
 
           /*
            * IMAGE + OVERLAY STAGE
+           *
+           * JS calculates exact px dimensions.
            */
 
           .plan-stage {
 
             position:relative;
 
-            display:inline-block;
-
             flex:
-              0 1 auto;
-
-            max-width:
-              100%;
-
-            max-height:
-              var(
-                --plan-max-height
-              );
+              0 0 auto;
 
             line-height:0;
           }
@@ -2049,20 +2274,11 @@ class HaIotFloorplan extends HTMLElement {
 
             display:block;
 
-            width:auto;
+            width:100%;
 
-            height:auto;
+            height:100%;
 
-            max-width:
-              100%;
-
-            max-height:
-              var(
-                --plan-max-height
-              );
-
-            object-fit:
-              contain;
+            object-fit:fill;
 
             pointer-events:none;
 
@@ -2071,26 +2287,6 @@ class HaIotFloorplan extends HTMLElement {
 
 
           .blank-stage {
-
-            width:
-              min(
-                100%,
-                calc(
-                  var(
-                    --plan-max-height
-                  ) *
-                  16 /
-                  9
-                )
-              );
-
-            aspect-ratio:
-              16 / 9;
-
-            max-height:
-              var(
-                --plan-max-height
-              );
 
             background-image:
 
@@ -2373,14 +2569,12 @@ class HaIotFloorplan extends HTMLElement {
             min-width:17px;
             height:17px;
 
-            border-radius:
-              999px;
+            border-radius:999px;
 
             padding:
               0 4px;
 
-            background:
-              #00a8ff;
+            background:#00a8ff;
 
             color:white;
 
@@ -2409,11 +2603,13 @@ class HaIotFloorplan extends HTMLElement {
 
 
           .online {
+
             background:#4caf50;
           }
 
 
           .offline {
+
             background:#777;
           }
 
@@ -2481,6 +2677,7 @@ class HaIotFloorplan extends HTMLElement {
            */
 
           .floating {
+
             margin-top:16px;
           }
 
@@ -2519,14 +2716,12 @@ class HaIotFloorplan extends HTMLElement {
                 --divider-color
               );
 
-            border-radius:
-              999px;
+            border-radius:999px;
 
             padding:
               6px 9px;
 
-            font-size:
-              10px;
+            font-size:10px;
           }
 
 
@@ -2585,8 +2780,7 @@ class HaIotFloorplan extends HTMLElement {
                 94vw
               );
 
-            max-height:
-              82vh;
+            max-height:82vh;
 
             overflow:auto;
 
@@ -2599,8 +2793,7 @@ class HaIotFloorplan extends HTMLElement {
                 .45
               );
 
-            border-radius:
-              14px;
+            border-radius:14px;
 
             background:
               var(
@@ -2658,8 +2851,7 @@ class HaIotFloorplan extends HTMLElement {
 
             border:0;
 
-            background:
-              transparent;
+            background:transparent;
 
             color:
               var(
@@ -2759,8 +2951,7 @@ class HaIotFloorplan extends HTMLElement {
             padding:
               7px 9px;
 
-            border-radius:
-              7px;
+            border-radius:7px;
 
             border:
               1px solid
@@ -2983,6 +3174,7 @@ class HaIotFloorplan extends HTMLElement {
           ${
             this._editMode
               ? `
+
                 <div class="edit-note">
 
                   Editing
@@ -3002,10 +3194,10 @@ class HaIotFloorplan extends HTMLElement {
                 </div>
 
 
-                <div class="height-control">
+                <div class="size-control">
 
-                  <div class="height-label">
-                    Floorplan height
+                  <div class="size-label">
+                    Floorplan size
                   </div>
 
 
@@ -3020,13 +3212,13 @@ class HaIotFloorplan extends HTMLElement {
 
 
                   <input
-                    id="height-slider"
-                    class="height-slider"
+                    id="size-slider"
+                    class="size-slider"
                     type="range"
                     min="40"
                     max="150"
                     step="5"
-                    value="${maxHeight}"
+                    value="${sizePercent}"
                   >
 
 
@@ -3041,13 +3233,20 @@ class HaIotFloorplan extends HTMLElement {
 
 
                   <div
-                    id="height-value"
-                    class="height-value"
+                    id="size-value"
+                    class="size-value"
                   >
-                    ${maxHeight} vh
+                    ${sizePercent}%
                   </div>
 
+
+                  <div
+                    id="size-status"
+                    class="size-status"
+                  ></div>
+
                 </div>
+
               `
               : ""
           }
@@ -3143,7 +3342,7 @@ class HaIotFloorplan extends HTMLElement {
 
           <div class="footer">
 
-            HA IoT Floorplan v0.4.3
+            HA IoT Floorplan v0.4.4
             •
             ${
               this._escapeHtml(
@@ -3154,7 +3353,7 @@ class HaIotFloorplan extends HTMLElement {
             ${data.areas.length}
             Areas
             •
-            ${maxHeight}vh
+            ${sizePercent}%
 
           </div>
 
@@ -3175,6 +3374,15 @@ class HaIotFloorplan extends HTMLElement {
 
 
     this._attachHandlers();
+
+
+    /*
+     * Apply sizing after DOM exists.
+     */
+    requestAnimationFrame(
+      () =>
+        this._applyPlanSize()
+    );
   }
 
 
@@ -3355,11 +3563,13 @@ class HaIotFloorplan extends HTMLElement {
 
 
         <div class="item-name">
+
           ${
             this._escapeHtml(
               title
             )
           }
+
         </div>
 
 
@@ -3427,11 +3637,13 @@ class HaIotFloorplan extends HTMLElement {
 
 
         <div class="item-name">
+
           ${
             this._escapeHtml(
               device.name
             )
           }
+
         </div>
 
 
@@ -3940,21 +4152,21 @@ class HaIotFloorplan extends HTMLElement {
 
 
     /*
-     * HEIGHT SLIDER
+     * SIZE SLIDER
      */
 
-    const heightSlider =
+    const sizeSlider =
       this.querySelector(
-        "#height-slider"
+        "#size-slider"
       );
 
 
-    heightSlider
+    sizeSlider
       ?.addEventListener(
         "input",
         event => {
 
-          this._setFloorHeight(
+          this._setFloorSize(
             event.target.value,
             false
           );
@@ -3962,12 +4174,12 @@ class HaIotFloorplan extends HTMLElement {
       );
 
 
-    heightSlider
+    sizeSlider
       ?.addEventListener(
         "change",
         event => {
 
-          this._setFloorHeight(
+          this._setFloorSize(
             event.target.value,
             true
           );
@@ -4069,6 +4281,40 @@ class HaIotFloorplan extends HTMLElement {
             );
         }
       );
+
+
+    /*
+     * Recalculate once image dimensions
+     * are actually available.
+     */
+
+    const image =
+      this.querySelector(
+        ".floorplan-image"
+      );
+
+
+    if (image) {
+
+      if (image.complete) {
+
+        requestAnimationFrame(
+          () =>
+            this._applyPlanSize()
+        );
+
+      } else {
+
+        image.addEventListener(
+          "load",
+          () =>
+            this._applyPlanSize(),
+          {
+            once:true
+          }
+        );
+      }
+    }
 
 
     this.querySelector(
@@ -4745,7 +4991,7 @@ if (
 
 
 console.info(
-  "%c HA IoT Floorplan %c v0.4.3 ",
+  "%c HA IoT Floorplan %c v0.4.4 ",
   "background:#00a8ff;color:white;font-weight:bold;",
   "background:#333;color:white;"
 );
