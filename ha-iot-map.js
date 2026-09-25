@@ -6,6 +6,7 @@ class HaIotMap extends HTMLElement {
     this._config = {};
     this._loaded = false;
     this._loading = false;
+    this._savingArea = new Set();
 
     this._areas = [];
     this._devices = [];
@@ -75,6 +76,32 @@ class HaIotMap extends HTMLElement {
     }
   }
 
+  async _reloadRegistries() {
+    try {
+      const [areas, devices, entities] = await Promise.all([
+        this._hass.callWS({
+          type: "config/area_registry/list",
+        }),
+
+        this._hass.callWS({
+          type: "config/device_registry/list",
+        }),
+
+        this._hass.callWS({
+          type: "config/entity_registry/list",
+        }),
+      ]);
+
+      this._areas = areas || [];
+      this._devices = devices || [];
+      this._entities = entities || [];
+
+      this._render();
+    } catch (err) {
+      console.error("HA IoT Map: registry refresh failed", err);
+    }
+  }
+
   _buildRawInventory() {
     const areaMap = new Map(
       this._areas.map(area => [area.area_id, area.name])
@@ -99,15 +126,20 @@ class HaIotMap extends HTMLElement {
 
     const inventory = [];
 
-    // HA Device Registry devices
+    //
+    // HOME ASSISTANT DEVICE REGISTRY DEVICES
+    //
     for (const device of this._devices) {
       const deviceEntities = entitiesByDevice.get(device.id) || [];
 
       if (deviceEntities.length === 0) continue;
 
+      const entityArea =
+        deviceEntities.find(e => e.area_id)?.area_id || null;
+
       const areaId =
         device.area_id ||
-        deviceEntities.find(e => e.area_id)?.area_id ||
+        entityArea ||
         null;
 
       const platforms = [
@@ -118,11 +150,13 @@ class HaIotMap extends HTMLElement {
         ),
       ];
 
-      const trackerEntities = deviceEntities.filter(e =>
-        e.entity_id?.startsWith("device_tracker.")
-      );
+      const trackerEntities =
+        deviceEntities.filter(e =>
+          e.entity_id?.startsWith("device_tracker.")
+        );
 
-      const stateInfo = this._getDeviceState(deviceEntities);
+      const stateInfo =
+        this._getDeviceState(deviceEntities);
 
       const networkInfo =
         this._extractNetworkInfo(device, deviceEntities);
@@ -130,6 +164,9 @@ class HaIotMap extends HTMLElement {
       inventory.push({
         id: device.id,
         sourceType: "device",
+
+        registryDeviceId: device.id,
+        registryEntityId: null,
 
         name:
           device.name_by_user ||
@@ -182,19 +219,30 @@ class HaIotMap extends HTMLElement {
       });
     }
 
-    // Standalone device_tracker entities
+    //
+    // STANDALONE DEVICE_TRACKER ENTITIES
+    //
     for (const entity of standaloneEntities) {
-      const state = this._hass.states[entity.entity_id];
+      const state =
+        this._hass.states[entity.entity_id];
 
       if (!state) continue;
 
-      const attrs = state.attributes || {};
-      const areaId = entity.area_id || null;
-      const platform = entity.platform || "unknown";
+      const attrs =
+        state.attributes || {};
+
+      const areaId =
+        entity.area_id || null;
+
+      const platform =
+        entity.platform || "unknown";
 
       inventory.push({
         id: entity.entity_id,
         sourceType: "tracker",
+
+        registryDeviceId: null,
+        registryEntityId: entity.entity_id,
 
         name:
           attrs.friendly_name ||
@@ -272,7 +320,8 @@ class HaIotMap extends HTMLElement {
     const noMac = [];
 
     for (const item of rawInventory) {
-      const normalizedMac = this._normalizeMac(item.mac);
+      const normalizedMac =
+        this._normalizeMac(item.mac);
 
       if (!normalizedMac) {
         noMac.push(item);
@@ -298,7 +347,8 @@ class HaIotMap extends HTMLElement {
         continue;
       }
 
-      const merged = this._mergeExactMacGroup(mac, items);
+      const merged =
+        this._mergeExactMacGroup(mac, items);
 
       mergedInventory.push(merged);
 
@@ -341,46 +391,13 @@ class HaIotMap extends HTMLElement {
       ),
     ];
 
-    const bestName = this._chooseBestName(items);
-
-    const ips = [
-      ...new Set(
-        items
-          .map(item => item.ip)
-          .filter(Boolean)
-      ),
-    ];
-
-    const hostnames = [
-      ...new Set(
-        items
-          .map(item => item.hostname)
-          .filter(Boolean)
-      ),
-    ];
-
-    const manufacturers = [
-      ...new Set(
-        items
-          .map(item => item.manufacturer)
-          .filter(Boolean)
-      ),
-    ];
-
-    const models = [
-      ...new Set(
-        items
-          .map(item => item.model)
-          .filter(Boolean)
-      ),
-    ];
-
     return {
       ...preferred,
 
       id: `mac:${mac}`,
 
-      name: bestName,
+      name:
+        this._chooseBestName(items),
 
       mac,
 
@@ -396,25 +413,29 @@ class HaIotMap extends HTMLElement {
         preferred.areaName ||
         null,
 
-      // If it has a fixed HA Area, don't classify it as floating.
       floating:
         assigned
           ? false
           : items.some(item => item.floating),
 
-      platforms: allPlatforms,
+      platforms:
+        allPlatforms,
 
       manufacturer:
-        manufacturers[0] || null,
+        items.find(i => i.manufacturer)
+          ?.manufacturer || null,
 
       model:
-        models[0] || null,
+        items.find(i => i.model)
+          ?.model || null,
 
       ip:
-        ips[0] || null,
+        items.find(i => i.ip)
+          ?.ip || null,
 
       hostname:
-        hostnames[0] || null,
+        items.find(i => i.hostname)
+          ?.hostname || null,
 
       online:
         items.some(item => item.online),
@@ -424,20 +445,16 @@ class HaIotMap extends HTMLElement {
 
       trackerCount:
         items.reduce(
-          (sum, item) => sum + (item.trackerCount || 0),
+          (sum, item) =>
+            sum + (item.trackerCount || 0),
           0
         ),
 
-      entityIds: allEntityIds,
+      entityIds:
+        allEntityIds,
 
-      mergedItems: items,
-
-      duplicateInfo: {
-        reason: "Exact MAC match",
-        sourceCount: items.length,
-        ips,
-        hostnames,
-      },
+      mergedItems:
+        items,
     };
   }
 
@@ -448,40 +465,40 @@ class HaIotMap extends HTMLElement {
       /^[0-9a-f]{2}([:-][0-9a-f]{2}){5}$/i,
     ];
 
-    const scored = items.map(item => {
-      let score = 0;
-      const name = item.name || "";
+    const scored =
+      items.map(item => {
+        let score = 0;
 
-      if (item.sourceType === "device") score += 5;
-      if (item.areaId) score += 3;
-      if (item.manufacturer) score += 2;
-      if (item.model) score += 2;
+        const name =
+          item.name || "";
 
-      if (
-        !badNamePatterns.some(pattern =>
-          pattern.test(name)
-        )
-      ) {
-        score += 5;
-      }
+        if (item.sourceType === "device") score += 5;
+        if (item.areaId) score += 3;
+        if (item.manufacturer) score += 2;
+        if (item.model) score += 2;
 
-      if (
-        item.platforms?.some(p =>
-          ["esphome", "mqtt", "shelly", "tradfri"].includes(p)
-        )
-      ) {
-        score += 2;
-      }
+        if (
+          !badNamePatterns.some(pattern =>
+            pattern.test(name)
+          )
+        ) {
+          score += 5;
+        }
 
-      return {
-        item,
-        score,
-      };
-    });
+        return {
+          item,
+          score,
+        };
+      });
 
-    scored.sort((a, b) => b.score - a.score);
+    scored.sort(
+      (a, b) => b.score - a.score
+    );
 
-    return scored[0]?.item?.name || "Unnamed device";
+    return (
+      scored[0]?.item?.name ||
+      "Unnamed device"
+    );
   }
 
   _getDeviceState(entities) {
@@ -490,11 +507,14 @@ class HaIotMap extends HTMLElement {
     let hasTracker = false;
 
     for (const entity of entities) {
-      const state = this._hass.states[entity.entity_id];
+      const state =
+        this._hass.states[entity.entity_id];
 
       if (!state) continue;
 
-      if (entity.entity_id.startsWith("device_tracker.")) {
+      if (
+        entity.entity_id.startsWith("device_tracker.")
+      ) {
         hasTracker = true;
 
         if (
@@ -550,11 +570,13 @@ class HaIotMap extends HTMLElement {
     }
 
     for (const entity of entities) {
-      const state = this._hass.states[entity.entity_id];
+      const state =
+        this._hass.states[entity.entity_id];
 
       if (!state) continue;
 
-      const attrs = state.attributes || {};
+      const attrs =
+        state.attributes || {};
 
       mac =
         mac ||
@@ -590,7 +612,7 @@ class HaIotMap extends HTMLElement {
     };
 
     for (const item of inventory) {
-      if (item.floating) {
+      if (item.floating && !item.areaId) {
         groups.floating.push(item);
         continue;
       }
@@ -604,7 +626,9 @@ class HaIotMap extends HTMLElement {
         groups.areas.set(item.areaName, []);
       }
 
-      groups.areas.get(item.areaName).push(item);
+      groups.areas
+        .get(item.areaName)
+        .push(item);
     }
 
     for (const list of groups.areas.values()) {
@@ -624,22 +648,90 @@ class HaIotMap extends HTMLElement {
     return groups;
   }
 
+  async _changeArea(itemId, areaId) {
+    const rawInventory =
+      this._buildRawInventory();
+
+    const dedupe =
+      this._deduplicateInventory(rawInventory);
+
+    const item =
+      dedupe.inventory.find(
+        device => device.id === itemId
+      );
+
+    if (!item) return;
+
+    const saveKey =
+      item.id;
+
+    if (this._savingArea.has(saveKey)) {
+      return;
+    }
+
+    this._savingArea.add(saveKey);
+
+    try {
+      //
+      // REAL HA DEVICE
+      //
+      if (item.registryDeviceId) {
+        await this._hass.callWS({
+          type:
+            "config/device_registry/update",
+
+          device_id:
+            item.registryDeviceId,
+
+          area_id:
+            areaId || null,
+        });
+      }
+
+      //
+      // STANDALONE ENTITY / TRACKER
+      //
+      else if (item.registryEntityId) {
+        await this._hass.callWS({
+          type:
+            "config/entity_registry/update",
+
+          entity_id:
+            item.registryEntityId,
+
+          area_id:
+            areaId || null,
+        });
+      }
+
+      await this._reloadRegistries();
+    } catch (err) {
+      console.error(
+        "HA IoT Map: area update failed",
+        item,
+        err
+      );
+
+      alert(
+        `Could not update Area for ${item.name}\n\n` +
+        (err?.message || String(err))
+      );
+    } finally {
+      this._savingArea.delete(saveKey);
+    }
+  }
+
   _render() {
     if (!this._hass || !this._loaded) return;
 
-    const rawInventory = this._buildRawInventory();
+    const rawInventory =
+      this._buildRawInventory();
 
     const dedupeResult =
       this._deduplicateInventory(rawInventory);
 
     const inventory =
       dedupeResult.inventory;
-
-    const duplicateGroups =
-      dedupeResult.duplicateGroups;
-
-    const mergedAwayCount =
-      dedupeResult.mergedAwayCount;
 
     const groups =
       this._groupInventory(inventory);
@@ -652,9 +744,23 @@ class HaIotMap extends HTMLElement {
           0
         );
 
+    const multiSourceCount =
+      inventory.filter(
+        item =>
+          new Set(item.platforms).size > 1
+      ).length;
+
+    const standaloneTrackerCount =
+      rawInventory.filter(
+        item =>
+          item.sourceType === "tracker"
+      ).length;
+
     this.innerHTML = `
       <ha-card>
+
         <style>
+
           .iot-wrap {
             padding: 18px;
           }
@@ -710,11 +816,18 @@ class HaIotMap extends HTMLElement {
 
           .device {
             display: grid;
+
             grid-template-columns:
-              14px minmax(150px, 1fr) auto;
-            gap: 10px;
+              14px
+              minmax(220px, 1fr)
+              minmax(180px, 260px)
+              minmax(120px, auto);
+
+            gap: 12px;
             align-items: center;
+
             padding: 10px 8px;
+
             border-bottom:
               1px solid var(--divider-color);
           }
@@ -752,15 +865,27 @@ class HaIotMap extends HTMLElement {
             text-align: right;
           }
 
-          .merge-badge {
-            display: inline-block;
-            font-size: 10px;
-            margin-left: 8px;
-            padding: 2px 6px;
-            border-radius: 8px;
+          .area-select {
+            width: 100%;
+            box-sizing: border-box;
+
+            padding: 7px 9px;
+
+            border-radius: 7px;
+
+            border:
+              1px solid var(--divider-color);
+
             background:
-              var(--secondary-background-color);
-            opacity: .8;
+              var(--card-background-color);
+
+            color:
+              var(--primary-text-color);
+          }
+
+          .area-select.unassigned {
+            border-color:
+              var(--warning-color, #ff9800);
           }
 
           .empty {
@@ -772,12 +897,9 @@ class HaIotMap extends HTMLElement {
           .diagnostics {
             margin-top: 24px;
             padding-top: 12px;
+
             border-top:
               1px solid var(--divider-color);
-          }
-
-          details {
-            margin-top: 8px;
           }
 
           summary {
@@ -785,43 +907,32 @@ class HaIotMap extends HTMLElement {
             font-weight: 600;
           }
 
-          .dup-group {
-            margin-top: 12px;
-            padding: 10px;
-            border-radius: 8px;
-            background:
-              var(--secondary-background-color);
-          }
-
-          .dup-mac {
-            font-family: monospace;
-            font-weight: 600;
-            margin-bottom: 6px;
-          }
-
-          .dup-item {
-            font-size: 12px;
-            opacity: .8;
-            margin: 4px 0;
-          }
-
-          @media (max-width: 600px) {
-            .source {
-              display: none;
-            }
+          @media (max-width: 800px) {
 
             .device {
               grid-template-columns:
-                14px minmax(100px, 1fr);
+                14px
+                minmax(120px, 1fr);
+            }
+
+            .area-control {
+              grid-column: 2;
+            }
+
+            .source {
+              display: none;
             }
           }
+
         </style>
+
 
         <div class="iot-wrap">
 
           <div class="iot-title">
             HA IoT Map
           </div>
+
 
           <div class="summary">
 
@@ -846,11 +957,22 @@ class HaIotMap extends HTMLElement {
             )}
 
             ${this._summaryBox(
-              mergedAwayCount,
+              dedupeResult.mergedAwayCount,
               "Duplicates merged"
             )}
 
+            ${this._summaryBox(
+              multiSourceCount,
+              "Multi-source"
+            )}
+
+            ${this._summaryBox(
+              standaloneTrackerCount,
+              "Standalone trackers"
+            )}
+
           </div>
+
 
           ${this._renderAssigned(groups)}
 
@@ -864,12 +986,43 @@ class HaIotMap extends HTMLElement {
             groups.floating
           )}
 
-          ${this._renderDuplicateDiagnostics(
-            rawInventory,
-            inventory,
-            duplicateGroups,
-            mergedAwayCount
-          )}
+
+          <div class="diagnostics">
+
+            <details>
+
+              <summary>
+                Area manager information
+              </summary>
+
+              <div
+                style="
+                  padding-top:10px;
+                  opacity:.7;
+                  font-size:12px;
+                  line-height:1.6;
+                "
+              >
+
+                ${this._areas.length}
+                Home Assistant Areas found.
+
+                <br>
+
+                Area assignments are stored directly
+                in Home Assistant.
+
+                <br>
+
+                Renaming an Area in HA will therefore
+                automatically appear here.
+
+              </div>
+
+            </details>
+
+          </div>
+
 
           <div
             style="
@@ -878,15 +1031,45 @@ class HaIotMap extends HTMLElement {
               font-size:11px;
             "
           >
-            HA IoT Map v0.2
+            HA IoT Map v0.3
             • HA ${this._escapeHtml(
               this._hass.config.version || ""
             )}
           </div>
 
         </div>
+
       </ha-card>
     `;
+
+    this._attachAreaHandlers();
+  }
+
+  _attachAreaHandlers() {
+    const selects =
+      this.querySelectorAll(
+        "select[data-iot-item]"
+      );
+
+    for (const select of selects) {
+      select.addEventListener(
+        "change",
+        event => {
+          const itemId =
+            event.target.dataset.iotItem;
+
+          const areaId =
+            event.target.value;
+
+          event.target.disabled = true;
+
+          this._changeArea(
+            itemId,
+            areaId
+          );
+        }
+      );
+    }
   }
 
   _renderAssigned(groups) {
@@ -899,12 +1082,15 @@ class HaIotMap extends HTMLElement {
     if (areas.length === 0) {
       return `
         <div class="section">
+
           <div class="section-title">
             Assigned
           </div>
+
           <div class="empty">
             No assigned devices found.
           </div>
+
         </div>
       `;
     }
@@ -916,18 +1102,21 @@ class HaIotMap extends HTMLElement {
           Assigned
         </div>
 
-        ${areas.map(([areaName, devices]) => `
-          <div class="area-title">
-            ${this._escapeHtml(areaName)}
-          </div>
+        ${areas.map(
+          ([areaName, devices]) => `
 
-          ${devices
-            .map(device =>
-              this._renderDevice(device)
-            )
-            .join("")}
+            <div class="area-title">
+              ${this._escapeHtml(areaName)}
+            </div>
 
-        `).join("")}
+            ${devices
+              .map(device =>
+                this._renderDevice(device)
+              )
+              .join("")}
+
+          `
+        ).join("")}
 
       </div>
     `;
@@ -956,6 +1145,46 @@ class HaIotMap extends HTMLElement {
         }
 
       </div>
+    `;
+  }
+
+  _renderAreaSelector(device) {
+    const sortedAreas =
+      [...this._areas]
+        .sort((a, b) =>
+          a.name.localeCompare(b.name)
+        );
+
+    return `
+      <select
+        class="
+          area-select
+          ${device.areaId ? "" : "unassigned"}
+        "
+        data-iot-item="${this._escapeHtml(device.id)}"
+      >
+
+        <option
+          value=""
+          ${!device.areaId ? "selected" : ""}
+        >
+          Unassigned
+        </option>
+
+        ${sortedAreas.map(area => `
+          <option
+            value="${this._escapeHtml(area.area_id)}"
+            ${
+              device.areaId === area.area_id
+                ? "selected"
+                : ""
+            }
+          >
+            ${this._escapeHtml(area.name)}
+          </option>
+        `).join("")}
+
+      </select>
     `;
   }
 
@@ -1010,7 +1239,9 @@ class HaIotMap extends HTMLElement {
 
     details.push(
       `${device.entityCount} entit${
-        device.entityCount === 1 ? "y" : "ies"
+        device.entityCount === 1
+          ? "y"
+          : "ies"
       }`
     );
 
@@ -1018,15 +1249,6 @@ class HaIotMap extends HTMLElement {
       device.platforms.length
         ? device.platforms.join(", ")
         : "unknown";
-
-    const mergeBadge =
-      device.mergedItems?.length > 1
-        ? `
-          <span class="merge-badge">
-            ${device.mergedItems.length} records merged
-          </span>
-        `
-        : "";
 
     return `
       <div class="device">
@@ -1037,15 +1259,17 @@ class HaIotMap extends HTMLElement {
             ${device.online ? "online" : "offline"}
           "
           title="${
-            device.online ? "Online" : "Offline"
+            device.online
+              ? "Online"
+              : "Offline"
           }"
         ></div>
+
 
         <div>
 
           <div class="device-name">
             ${this._escapeHtml(device.name)}
-            ${mergeBadge}
           </div>
 
           <div class="device-details">
@@ -1054,96 +1278,15 @@ class HaIotMap extends HTMLElement {
 
         </div>
 
+
+        <div class="area-control">
+          ${this._renderAreaSelector(device)}
+        </div>
+
+
         <div class="source">
           ${this._escapeHtml(source)}
         </div>
-
-      </div>
-    `;
-  }
-
-  _renderDuplicateDiagnostics(
-    rawInventory,
-    inventory,
-    duplicateGroups,
-    mergedAwayCount
-  ) {
-    if (!duplicateGroups.length) {
-      return `
-        <div class="diagnostics">
-          <details>
-            <summary>
-              Duplicate diagnostics
-            </summary>
-
-            <div style="padding:10px 0;opacity:.7">
-              No exact-MAC duplicates found.
-              Raw records: ${rawInventory.length}.
-            </div>
-          </details>
-        </div>
-      `;
-    }
-
-    return `
-      <div class="diagnostics">
-
-        <details>
-
-          <summary>
-            Duplicate diagnostics
-            (${duplicateGroups.length} groups,
-            ${mergedAwayCount} records removed)
-          </summary>
-
-          <div style="padding-top:8px;opacity:.7;font-size:12px">
-            Raw records:
-            ${rawInventory.length}
-            • Physical devices:
-            ${inventory.length}
-          </div>
-
-          ${duplicateGroups.map(group => `
-            <div class="dup-group">
-
-              <div class="dup-mac">
-                ${this._escapeHtml(group.mac)}
-              </div>
-
-              <div style="font-size:12px;margin-bottom:6px">
-                Exact MAC match
-                • ${group.items.length} records
-                → ${this._escapeHtml(group.merged.name)}
-              </div>
-
-              ${group.items.map(item => `
-                <div class="dup-item">
-                  <strong>
-                    ${this._escapeHtml(item.name)}
-                  </strong>
-                  • ${this._escapeHtml(
-                    item.sourceType
-                  )}
-                  • ${this._escapeHtml(
-                    item.platforms.join(", ")
-                  )}
-                  ${
-                    item.ip
-                      ? ` • ${this._escapeHtml(item.ip)}`
-                      : ""
-                  }
-                  ${
-                    item.areaName
-                      ? ` • Area: ${this._escapeHtml(item.areaName)}`
-                      : ""
-                  }
-                </div>
-              `).join("")}
-
-            </div>
-          `).join("")}
-
-        </details>
 
       </div>
     `;
@@ -1168,9 +1311,11 @@ class HaIotMap extends HTMLElement {
   _renderLoading() {
     this.innerHTML = `
       <ha-card header="HA IoT Map">
+
         <div style="padding:16px">
           Reading Home Assistant registries...
         </div>
+
       </ha-card>
     `;
   }
@@ -1196,6 +1341,7 @@ class HaIotMap extends HTMLElement {
   }
 }
 
+
 if (!customElements.get("ha-iot-map")) {
   customElements.define(
     "ha-iot-map",
@@ -1203,12 +1349,15 @@ if (!customElements.get("ha-iot-map")) {
   );
 }
 
+
 window.customCards =
   window.customCards || [];
 
+
 if (
   !window.customCards.some(
-    card => card.type === "ha-iot-map"
+    card =>
+      card.type === "ha-iot-map"
   )
 ) {
   window.customCards.push({
@@ -1219,8 +1368,9 @@ if (
   });
 }
 
+
 console.info(
-  "%c HA IoT Map %c v0.2 ",
+  "%c HA IoT Map %c v0.3 ",
   "background:#03a9f4;color:white;font-weight:bold;",
   "background:#333;color:white;"
 );
