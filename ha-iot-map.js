@@ -7,20 +7,34 @@ class HaIotMap extends HTMLElement {
     this._loaded = false;
     this._loading = false;
     this._savingArea = new Set();
+    this._savingClass = new Set();
 
     this._areas = [];
     this._devices = [];
     this._entities = [];
+    this._labels = [];
 
     this._autoUpdate = false;
     this._lastAutoRefresh = 0;
     this._autoRefreshInterval = 5000;
 
-    this._classificationStorageKey =
-      "ha_iot_map_classifications_v1";
+    this._legacyStorageKey = "ha_iot_map_classifications_v1";
+    this._migrationStorageKey = "ha_iot_map_labels_migrated_v07";
 
-    this._classifications =
-      this._loadClassifications();
+    this._labelDefs = {
+      fixed:    { name: "IoT Fixed",    icon: "mdi:map-marker" },
+      floating: { name: "IoT Floating", icon: "mdi:access-point-network" },
+      ignored:  { name: "IoT Ignored",  icon: "mdi:eye-off" },
+    };
+
+    this._labelIds = {
+      fixed: null,
+      floating: null,
+      ignored: null,
+    };
+
+    this._setupError = null;
+    this._setupMessage = null;
   }
 
   setConfig(config) {
@@ -31,12 +45,11 @@ class HaIotMap extends HTMLElement {
     this._hass = hass;
 
     if (!this._loaded && !this._loading) {
-      this._loadRegistryData();
+      this._loadAll();
       return;
     }
 
-    if (!this._loaded) return;
-    if (!this._autoUpdate) return;
+    if (!this._loaded || !this._autoUpdate) return;
 
     const now = Date.now();
 
@@ -49,31 +62,20 @@ class HaIotMap extends HTMLElement {
     }
   }
 
-  async _loadRegistryData() {
+  get _isAdmin() {
+    return !!this._hass?.user?.is_admin;
+  }
+
+  async _loadAll() {
     if (!this._hass) return;
 
     this._loading = true;
     this._renderLoading();
 
     try {
-      const [areas, devices, entities] =
-        await Promise.all([
-          this._hass.callWS({
-            type: "config/area_registry/list",
-          }),
-
-          this._hass.callWS({
-            type: "config/device_registry/list",
-          }),
-
-          this._hass.callWS({
-            type: "config/entity_registry/list",
-          }),
-        ]);
-
-      this._areas = areas || [];
-      this._devices = devices || [];
-      this._entities = entities || [];
+      await this._reloadRegistries(false);
+      await this._ensureSharedLabels();
+      await this._migrateLegacyClassifications();
 
       this._loaded = true;
       this._loading = false;
@@ -81,12 +83,11 @@ class HaIotMap extends HTMLElement {
 
       this._render();
     } catch (err) {
-      console.error(
-        "HA IoT Map: registry load failed",
-        err
-      );
+      console.error("HA IoT Map: initial load failed", err);
 
       this._loading = false;
+      this._setupError =
+        err?.message || String(err);
 
       this.innerHTML = `
         <ha-card header="HA IoT Map">
@@ -94,137 +95,495 @@ class HaIotMap extends HTMLElement {
             padding:16px;
             color:var(--error-color)
           ">
-            Registry loading failed.
+            HA IoT Map failed to initialize.
             <br><br>
-            ${this._escapeHtml(
-              err?.message || String(err)
-            )}
+            ${this._escapeHtml(this._setupError)}
           </div>
         </ha-card>
       `;
     }
   }
 
-  async _reloadRegistries() {
-    try {
-      const [areas, devices, entities] =
-        await Promise.all([
-          this._hass.callWS({
-            type: "config/area_registry/list",
-          }),
+  async _reloadRegistries(renderAfter = true) {
+    const [areas, devices, entities, labels] =
+      await Promise.all([
+        this._hass.callWS({
+          type: "config/area_registry/list",
+        }),
 
-          this._hass.callWS({
-            type: "config/device_registry/list",
-          }),
+        this._hass.callWS({
+          type: "config/device_registry/list",
+        }),
 
-          this._hass.callWS({
-            type: "config/entity_registry/list",
-          }),
-        ]);
+        this._hass.callWS({
+          type: "config/entity_registry/list",
+        }),
 
-      this._areas = areas || [];
-      this._devices = devices || [];
-      this._entities = entities || [];
+        this._hass.callWS({
+          type: "config/label_registry/list",
+        }),
+      ]);
 
-      this._lastAutoRefresh = Date.now();
+    this._areas = areas || [];
+    this._devices = devices || [];
+    this._entities = entities || [];
+    this._labels = labels || [];
 
+    this._resolveLabelIds();
+    this._lastAutoRefresh = Date.now();
+
+    if (
+      renderAfter &&
+      this._loaded
+    ) {
       this._render();
-    } catch (err) {
-      console.error(
-        "HA IoT Map: registry refresh failed",
-        err
-      );
     }
   }
 
-  _loadClassifications() {
-    try {
-      const raw =
-        localStorage.getItem(
-          this._classificationStorageKey
+  _resolveLabelIds() {
+    for (
+      const key
+      of Object.keys(this._labelDefs)
+    ) {
+      const wanted =
+        this._labelDefs[key]
+          .name
+          .toLowerCase();
+
+      const match =
+        this._labels.find(
+          label =>
+            String(label.name || "")
+              .trim()
+              .toLowerCase() ===
+            wanted
         );
 
-      if (!raw) return {};
-
-      const parsed =
-        JSON.parse(raw);
-
-      return (
-        parsed &&
-        typeof parsed === "object"
-      )
-        ? parsed
-        : {};
-    } catch (err) {
-      console.warn(
-        "HA IoT Map: classification load failed",
-        err
-      );
-
-      return {};
+      this._labelIds[key] =
+        match?.label_id ||
+        match?.id ||
+        null;
     }
   }
 
-  _saveClassifications() {
-    try {
-      localStorage.setItem(
-        this._classificationStorageKey,
-        JSON.stringify(
-          this._classifications
+  async _ensureSharedLabels() {
+    this._resolveLabelIds();
+
+    const missing =
+      Object.entries(
+        this._labelIds
+      )
+        .filter(
+          ([, id]) =>
+            !id
         )
-      );
-    } catch (err) {
-      console.warn(
-        "HA IoT Map: classification save failed",
-        err
-      );
+        .map(
+          ([key]) =>
+            key
+        );
+
+    if (!missing.length) {
+      this._setupMessage =
+        "Shared classification labels ready";
+      return;
     }
+
+    if (!this._isAdmin) {
+      this._setupMessage =
+        "Shared classification setup is incomplete. An administrator must open this card once.";
+      return;
+    }
+
+    for (
+      const key
+      of missing
+    ) {
+      const def =
+        this._labelDefs[key];
+
+      try {
+        await this._hass.callWS({
+          type:
+            "config/label_registry/create",
+
+          name:
+            def.name,
+
+          icon:
+            def.icon,
+        });
+      } catch (err) {
+        console.warn(
+          `HA IoT Map: could not create label ${def.name}`,
+          err
+        );
+      }
+    }
+
+    this._labels =
+      (
+        await this._hass.callWS({
+          type:
+            "config/label_registry/list",
+        })
+      ) || [];
+
+    this._resolveLabelIds();
+
+    const stillMissing =
+      Object.entries(
+        this._labelIds
+      )
+        .filter(
+          ([, id]) =>
+            !id
+        )
+        .map(
+          ([key]) =>
+            this._labelDefs[key].name
+        );
+
+    if (stillMissing.length) {
+      this._setupMessage =
+        `Could not initialize shared labels: ${stillMissing.join(", ")}`;
+    } else {
+      this._setupMessage =
+        "Shared classification labels initialized automatically";
+    }
+  }
+
+  _getRegistryLabels(item) {
+    const labels =
+      item.registryLabels;
+
+    return Array.isArray(labels)
+      ? labels
+      : [];
   }
 
   _getStoredClassification(item) {
-    const stored =
-      this._classifications[item.id];
+    const labels =
+      new Set(
+        this._getRegistryLabels(item)
+      );
 
     if (
-      stored === "fixed" ||
-      stored === "floating" ||
-      stored === "ignored"
+      this._labelIds.ignored &&
+      labels.has(
+        this._labelIds.ignored
+      )
     ) {
-      return stored;
+      return "ignored";
+    }
+
+    if (
+      this._labelIds.floating &&
+      labels.has(
+        this._labelIds.floating
+      )
+    ) {
+      return "floating";
+    }
+
+    if (
+      this._labelIds.fixed &&
+      labels.has(
+        this._labelIds.fixed
+      )
+    ) {
+      return "fixed";
     }
 
     return "auto";
   }
 
-  _setClassification(itemId, value) {
-    if (value === "auto") {
-      delete this._classifications[itemId];
-    } else if (
-      value === "fixed" ||
-      value === "floating" ||
-      value === "ignored"
+  async _setClassification(
+    itemId,
+    value
+  ) {
+    if (!this._isAdmin) return;
+
+    const {
+      inventory
+    } =
+      this._deduplicateInventory(
+        this._buildRawInventory()
+      );
+
+    const item =
+      inventory.find(
+        x =>
+          x.id === itemId
+      );
+
+    if (
+      !item ||
+      this._savingClass.has(
+        item.id
+      )
     ) {
-      this._classifications[itemId] =
-        value;
-    } else {
       return;
     }
 
-    this._saveClassifications();
-    this._render();
+    this._savingClass.add(
+      item.id
+    );
+
+    try {
+      const current =
+        new Set(
+          this._getRegistryLabels(
+            item
+          )
+        );
+
+      for (
+        const id
+        of Object.values(
+          this._labelIds
+        )
+      ) {
+        if (id) {
+          current.delete(id);
+        }
+      }
+
+      if (
+        value !== "auto"
+      ) {
+        const labelId =
+          this._labelIds[value];
+
+        if (!labelId) {
+          throw new Error(
+            `Shared label for "${value}" is not available`
+          );
+        }
+
+        current.add(
+          labelId
+        );
+      }
+
+      const labels =
+        [...current];
+
+      if (
+        item.registryDeviceId
+      ) {
+        await this._hass.callWS({
+          type:
+            "config/device_registry/update",
+
+          device_id:
+            item.registryDeviceId,
+
+          labels,
+        });
+      } else if (
+        item.registryEntityId
+      ) {
+        await this._hass.callWS({
+          type:
+            "config/entity_registry/update",
+
+          entity_id:
+            item.registryEntityId,
+
+          labels,
+        });
+      } else {
+        throw new Error(
+          "This item has no writable HA registry entry"
+        );
+      }
+
+      await this._reloadRegistries(false);
+      this._render();
+    } catch (err) {
+      console.error(
+        "HA IoT Map: classification update failed",
+        item,
+        err
+      );
+
+      alert(
+        `Could not update classification for ${item.name}\n\n` +
+        (
+          err?.message ||
+          String(err)
+        )
+      );
+
+      await this._reloadRegistries(false);
+      this._render();
+    } finally {
+      this._savingClass.delete(
+        item.id
+      );
+    }
+  }
+
+  async _migrateLegacyClassifications() {
+    if (!this._isAdmin) return;
+
+    if (
+      localStorage.getItem(
+        this._migrationStorageKey
+      ) === "1"
+    ) {
+      return;
+    }
+
+    let legacy = {};
+
+    try {
+      legacy =
+        JSON.parse(
+          localStorage.getItem(
+            this._legacyStorageKey
+          ) || "{}"
+        );
+    } catch {
+      legacy = {};
+    }
+
+    const entries =
+      Object.entries(
+        legacy
+      ).filter(
+        ([, value]) =>
+          [
+            "fixed",
+            "floating",
+            "ignored"
+          ].includes(value)
+      );
+
+    if (!entries.length) {
+      localStorage.setItem(
+        this._migrationStorageKey,
+        "1"
+      );
+      return;
+    }
+
+    const {
+      inventory
+    } =
+      this._deduplicateInventory(
+        this._buildRawInventory()
+      );
+
+    let migrated = 0;
+
+    for (
+      const [
+        itemId,
+        classification
+      ]
+      of entries
+    ) {
+      const item =
+        inventory.find(
+          x =>
+            x.id === itemId
+        );
+
+      if (!item) continue;
+
+      const labelId =
+        this._labelIds[
+          classification
+        ];
+
+      if (!labelId) continue;
+
+      const current =
+        new Set(
+          this._getRegistryLabels(
+            item
+          )
+        );
+
+      for (
+        const id
+        of Object.values(
+          this._labelIds
+        )
+      ) {
+        if (id) {
+          current.delete(id);
+        }
+      }
+
+      current.add(
+        labelId
+      );
+
+      try {
+        if (
+          item.registryDeviceId
+        ) {
+          await this._hass.callWS({
+            type:
+              "config/device_registry/update",
+
+            device_id:
+              item.registryDeviceId,
+
+            labels:
+              [...current],
+          });
+
+          migrated++;
+        } else if (
+          item.registryEntityId
+        ) {
+          await this._hass.callWS({
+            type:
+              "config/entity_registry/update",
+
+            entity_id:
+              item.registryEntityId,
+
+            labels:
+              [...current],
+          });
+
+          migrated++;
+        }
+      } catch (err) {
+        console.warn(
+          "HA IoT Map: legacy classification migration failed",
+          item,
+          err
+        );
+      }
+    }
+
+    if (migrated) {
+      await this._reloadRegistries(false);
+
+      this._setupMessage =
+        `Migrated ${migrated} browser-local classifications to Home Assistant labels`;
+    }
+
+    localStorage.setItem(
+      this._migrationStorageKey,
+      "1"
+    );
   }
 
   _isPhysicalCandidate(item) {
     const platforms =
       (item.platforms || [])
-        .map(p =>
-          String(p).toLowerCase()
+        .map(
+          p =>
+            String(p)
+              .toLowerCase()
         );
 
-    /*
-     * Things we know are software objects,
-     * not physical devices.
-     */
     const softwareOnly =
       new Set([
         "hacs",
@@ -232,10 +591,6 @@ class HaIotMap extends HTMLElement {
         "frontend",
       ]);
 
-    /*
-     * Known integrations that commonly
-     * represent physical hardware.
-     */
     const physicalPlatforms =
       new Set([
         "esphome",
@@ -259,28 +614,11 @@ class HaIotMap extends HTMLElement {
         "wled",
       ]);
 
-    /*
-     * Explicit software platform means
-     * software unless there is strong
-     * physical/network evidence.
-     */
-    const softwarePlatform =
-      platforms.some(
-        p => softwareOnly.has(p)
-      );
-
-    /*
-     * Strong evidence of a real network
-     * endpoint.
-     */
     if (item.mac) return true;
     if (item.ip) return true;
     if (item.hostname) return true;
     if (item.trackerCount > 0) return true;
 
-    /*
-     * Known hardware integrations.
-     */
     if (
       platforms.some(
         p =>
@@ -290,33 +628,41 @@ class HaIotMap extends HTMLElement {
       return true;
     }
 
-    /*
-     * Software-only objects are rejected.
-     */
-    if (softwarePlatform) {
+    if (
+      platforms.some(
+        p =>
+          softwareOnly.has(p)
+      )
+    ) {
       return false;
     }
 
-    /*
-     * Unknown/no-network/no-known-hardware
-     * defaults to filtered.
-     */
     return false;
   }
 
   _getEffectiveClassification(item) {
     const stored =
-      this._getStoredClassification(item);
+      this._getStoredClassification(
+        item
+      );
 
-    if (stored !== "auto") {
+    if (
+      stored !== "auto"
+    ) {
       return stored;
     }
 
-    if (!this._isPhysicalCandidate(item)) {
+    if (
+      !this._isPhysicalCandidate(
+        item
+      )
+    ) {
       return "filtered";
     }
 
-    if (item.floating) {
+    if (
+      item.floating
+    ) {
       return "floating";
     }
 
@@ -340,10 +686,19 @@ class HaIotMap extends HTMLElement {
     const standaloneEntities =
       [];
 
-    for (const entity of this._entities) {
-      if (entity.disabled_by) continue;
+    for (
+      const entity
+      of this._entities
+    ) {
+      if (
+        entity.disabled_by
+      ) {
+        continue;
+      }
 
-      if (entity.device_id) {
+      if (
+        entity.device_id
+      ) {
         if (
           !entitiesByDevice.has(
             entity.device_id
@@ -356,7 +711,9 @@ class HaIotMap extends HTMLElement {
         }
 
         entitiesByDevice
-          .get(entity.device_id)
+          .get(
+            entity.device_id
+          )
           .push(entity);
       } else if (
         entity.entity_id?.startsWith(
@@ -369,23 +726,28 @@ class HaIotMap extends HTMLElement {
       }
     }
 
-    const inventory = [];
+    const inventory =
+      [];
 
-    for (const device of this._devices) {
+    for (
+      const device
+      of this._devices
+    ) {
       const deviceEntities =
         entitiesByDevice.get(
           device.id
         ) || [];
 
       if (
-        deviceEntities.length === 0
+        !deviceEntities.length
       ) {
         continue;
       }
 
       const entityArea =
         deviceEntities.find(
-          e => e.area_id
+          e =>
+            e.area_id
         )?.area_id || null;
 
       const areaId =
@@ -396,7 +758,10 @@ class HaIotMap extends HTMLElement {
       const platforms = [
         ...new Set(
           deviceEntities
-            .map(e => e.platform)
+            .map(
+              e =>
+                e.platform
+            )
             .filter(Boolean)
         ),
       ];
@@ -421,7 +786,8 @@ class HaIotMap extends HTMLElement {
         );
 
       inventory.push({
-        id: device.id,
+        id:
+          device.id,
 
         sourceType:
           "device",
@@ -431,6 +797,13 @@ class HaIotMap extends HTMLElement {
 
         registryEntityId:
           null,
+
+        registryLabels:
+          Array.isArray(
+            device.labels
+          )
+            ? device.labels
+            : [],
 
         name:
           device.name_by_user ||
@@ -442,7 +815,9 @@ class HaIotMap extends HTMLElement {
 
         areaName:
           areaId
-            ? areaMap.get(areaId) ||
+            ? areaMap.get(
+                areaId
+              ) ||
               areaId
             : null,
 
@@ -485,10 +860,12 @@ class HaIotMap extends HTMLElement {
 
         entityIds:
           deviceEntities.map(
-            e => e.entity_id
+            e =>
+              e.entity_id
           ),
 
-        mergedItems: [],
+        mergedItems:
+          [],
       });
     }
 
@@ -504,10 +881,12 @@ class HaIotMap extends HTMLElement {
       if (!state) continue;
 
       const attrs =
-        state.attributes || {};
+        state.attributes ||
+        {};
 
       const areaId =
-        entity.area_id || null;
+        entity.area_id ||
+        null;
 
       const platform =
         entity.platform ||
@@ -526,6 +905,13 @@ class HaIotMap extends HTMLElement {
         registryEntityId:
           entity.entity_id,
 
+        registryLabels:
+          Array.isArray(
+            entity.labels
+          )
+            ? entity.labels
+            : [],
+
         name:
           attrs.friendly_name ||
           entity.original_name ||
@@ -535,7 +921,9 @@ class HaIotMap extends HTMLElement {
 
         areaName:
           areaId
-            ? areaMap.get(areaId) ||
+            ? areaMap.get(
+                areaId
+              ) ||
               areaId
             : null,
 
@@ -613,7 +1001,8 @@ class HaIotMap extends HTMLElement {
         );
 
     if (
-      compact.length !== 12
+      compact.length !==
+      12
     ) {
       return null;
     }
@@ -641,8 +1030,12 @@ class HaIotMap extends HTMLElement {
           item.mac
         );
 
-      if (!normalizedMac) {
-        noMac.push(item);
+      if (
+        !normalizedMac
+      ) {
+        noMac.push(
+          item
+        );
         continue;
       }
 
@@ -661,7 +1054,9 @@ class HaIotMap extends HTMLElement {
       }
 
       macGroups
-        .get(normalizedMac)
+        .get(
+          normalizedMac
+        )
         .push(item);
     }
 
@@ -708,7 +1103,8 @@ class HaIotMap extends HTMLElement {
       });
 
       mergedAwayCount +=
-        items.length - 1;
+        items.length -
+        1;
     }
 
     mergedInventory.push(
@@ -734,13 +1130,15 @@ class HaIotMap extends HTMLElement {
         item =>
           item.sourceType ===
           "device"
-      ) || items[0];
+      ) ||
+      items[0];
 
     const assigned =
       items.find(
         item =>
           item.areaId
-      ) || null;
+      ) ||
+      null;
 
     const allPlatforms = [
       ...new Set(
@@ -801,25 +1199,29 @@ class HaIotMap extends HTMLElement {
 
       manufacturer:
         items.find(
-          i => i.manufacturer
+          i =>
+            i.manufacturer
         )?.manufacturer ||
         null,
 
       model:
         items.find(
-          i => i.model
+          i =>
+            i.model
         )?.model ||
         null,
 
       ip:
         items.find(
-          i => i.ip
+          i =>
+            i.ip
         )?.ip ||
         null,
 
       hostname:
         items.find(
-          i => i.hostname
+          i =>
+            i.hostname
         )?.hostname ||
         null,
 
@@ -854,7 +1256,9 @@ class HaIotMap extends HTMLElement {
     };
   }
 
-  _chooseBestName(items) {
+  _chooseBestName(
+    items
+  ) {
     const badNamePatterns = [
       /^device_tracker\./i,
       /^unknown/i,
@@ -867,7 +1271,8 @@ class HaIotMap extends HTMLElement {
           let score = 0;
 
           const name =
-            item.name || "";
+            item.name ||
+            "";
 
           if (
             item.sourceType ===
@@ -876,7 +1281,9 @@ class HaIotMap extends HTMLElement {
             score += 5;
           }
 
-          if (item.areaId) {
+          if (
+            item.areaId
+          ) {
             score += 3;
           }
 
@@ -886,14 +1293,18 @@ class HaIotMap extends HTMLElement {
             score += 2;
           }
 
-          if (item.model) {
+          if (
+            item.model
+          ) {
             score += 2;
           }
 
           if (
             !badNamePatterns.some(
               pattern =>
-                pattern.test(name)
+                pattern.test(
+                  name
+                )
             )
           ) {
             score += 5;
@@ -907,8 +1318,12 @@ class HaIotMap extends HTMLElement {
       );
 
     scored.sort(
-      (a, b) =>
-        b.score - a.score
+      (
+        a,
+        b
+      ) =>
+        b.score -
+        a.score
     );
 
     return (
@@ -948,12 +1363,13 @@ class HaIotMap extends HTMLElement {
         hasTracker = true;
 
         if (
-          state.state !==
-            "not_home" &&
-          state.state !==
-            "unavailable" &&
-          state.state !==
+          ![
+            "not_home",
+            "unavailable",
             "unknown"
+          ].includes(
+            state.state
+          )
         ) {
           hasOnlineTracker =
             true;
@@ -963,26 +1379,23 @@ class HaIotMap extends HTMLElement {
       }
 
       if (
-        state.state !==
-          "unavailable" &&
-        state.state !==
+        ![
+          "unavailable",
           "unknown"
+        ].includes(
+          state.state
+        )
       ) {
         hasUsableEntity =
           true;
       }
     }
 
-    if (hasTracker) {
-      return {
-        online:
-          hasOnlineTracker,
-      };
-    }
-
     return {
       online:
-        hasUsableEntity,
+        hasTracker
+          ? hasOnlineTracker
+          : hasUsableEntity,
     };
   }
 
@@ -1013,7 +1426,8 @@ class HaIotMap extends HTMLElement {
           const [
             type,
             value
-          ] = connection;
+          ] =
+            connection;
 
           if (
             String(type)
@@ -1038,7 +1452,8 @@ class HaIotMap extends HTMLElement {
       if (!state) continue;
 
       const attrs =
-        state.attributes || {};
+        state.attributes ||
+        {};
 
       mac =
         mac ||
@@ -1102,7 +1517,6 @@ class HaIotMap extends HTMLElement {
         groups.filtered.push(
           item
         );
-
         continue;
       }
 
@@ -1113,7 +1527,6 @@ class HaIotMap extends HTMLElement {
         groups.ignored.push(
           item
         );
-
         continue;
       }
 
@@ -1124,15 +1537,15 @@ class HaIotMap extends HTMLElement {
         groups.floating.push(
           item
         );
-
         continue;
       }
 
-      if (!item.areaId) {
+      if (
+        !item.areaId
+      ) {
         groups.unassigned.push(
           item
         );
-
         continue;
       }
 
@@ -1148,12 +1561,17 @@ class HaIotMap extends HTMLElement {
       }
 
       groups.areas
-        .get(item.areaName)
+        .get(
+          item.areaName
+        )
         .push(item);
     }
 
     const sorter =
-      (a, b) =>
+      (
+        a,
+        b
+      ) =>
         a.name.localeCompare(
           b.name
         );
@@ -1162,7 +1580,9 @@ class HaIotMap extends HTMLElement {
       const list
       of groups.areas.values()
     ) {
-      list.sort(sorter);
+      list.sort(
+        sorter
+      );
     }
 
     groups.unassigned.sort(
@@ -1188,24 +1608,24 @@ class HaIotMap extends HTMLElement {
     itemId,
     areaId
   ) {
-    const rawInventory =
-      this._buildRawInventory();
+    if (!this._isAdmin) return;
 
-    const dedupe =
+    const {
+      inventory
+    } =
       this._deduplicateInventory(
-        rawInventory
+        this._buildRawInventory()
       );
 
     const item =
-      dedupe.inventory.find(
+      inventory.find(
         device =>
           device.id ===
           itemId
       );
 
-    if (!item) return;
-
     if (
+      !item ||
       this._savingArea.has(
         item.id
       )
@@ -1246,7 +1666,11 @@ class HaIotMap extends HTMLElement {
         });
       }
 
-      await this._reloadRegistries();
+      await this._reloadRegistries(
+        false
+      );
+
+      this._render();
     } catch (err) {
       console.error(
         "HA IoT Map: area update failed",
@@ -1261,6 +1685,12 @@ class HaIotMap extends HTMLElement {
           String(err)
         )
       );
+
+      await this._reloadRegistries(
+        false
+      );
+
+      this._render();
     } finally {
       this._savingArea.delete(
         item.id
@@ -1279,7 +1709,13 @@ class HaIotMap extends HTMLElement {
   }
 
   async _manualRefresh() {
-    await this._reloadRegistries();
+    await this._reloadRegistries(
+      false
+    );
+
+    await this._ensureSharedLabels();
+
+    this._render();
   }
 
   _render() {
@@ -1329,15 +1765,24 @@ class HaIotMap extends HTMLElement {
         item =>
           new Set(
             item.platforms
-          ).size > 1
+          ).size >
+          1
       ).length;
 
-    const standaloneTrackerCount =
-      rawInventory.filter(
-        item =>
-          item.sourceType ===
-          "tracker"
-      ).length;
+    const missingLabels =
+      Object.entries(
+        this._labelIds
+      )
+        .filter(
+          ([, id]) =>
+            !id
+        )
+        .map(
+          ([key]) =>
+            this._labelDefs[
+              key
+            ].name
+        );
 
     this.innerHTML = `
       <ha-card>
@@ -1345,7 +1790,7 @@ class HaIotMap extends HTMLElement {
         <style>
 
           .iot-wrap {
-            padding: 18px;
+            padding:18px;
           }
 
           .iot-header {
@@ -1374,10 +1819,14 @@ class HaIotMap extends HTMLElement {
               var(--divider-color);
 
             background:
-              var(--secondary-background-color);
+              var(
+                --secondary-background-color
+              );
 
             color:
-              var(--primary-text-color);
+              var(
+                --primary-text-color
+              );
 
             border-radius:8px;
             padding:8px 12px;
@@ -1391,10 +1840,6 @@ class HaIotMap extends HTMLElement {
                 --success-color,
                 #4caf50
               );
-          }
-
-          .auto-off {
-            opacity:.75;
           }
 
           .summary {
@@ -1434,6 +1879,37 @@ class HaIotMap extends HTMLElement {
             margin-top:2px;
           }
 
+          .setup {
+            margin-bottom:16px;
+            padding:10px 12px;
+            border-radius:8px;
+
+            background:
+              var(
+                --secondary-background-color
+              );
+
+            font-size:12px;
+          }
+
+          .setup-ok {
+            border-left:
+              4px solid
+              var(
+                --success-color,
+                #4caf50
+              );
+          }
+
+          .setup-warn {
+            border-left:
+              4px solid
+              var(
+                --warning-color,
+                #ff9800
+              );
+          }
+
           .section {
             margin-top:22px;
           }
@@ -1447,7 +1923,7 @@ class HaIotMap extends HTMLElement {
           .area-title {
             font-size:15px;
             font-weight:600;
-            margin:16px 0 6px 0;
+            margin:16px 0 6px;
             opacity:.85;
           }
 
@@ -1516,7 +1992,9 @@ class HaIotMap extends HTMLElement {
 
             border:
               1px solid
-              var(--divider-color);
+              var(
+                --divider-color
+              );
 
             background:
               var(
@@ -1527,6 +2005,11 @@ class HaIotMap extends HTMLElement {
               var(
                 --primary-text-color
               );
+          }
+
+          .select-control:disabled {
+            opacity:.45;
+            cursor:not-allowed;
           }
 
           .area-select.unassigned {
@@ -1553,10 +2036,6 @@ class HaIotMap extends HTMLElement {
               );
           }
 
-          .classification-auto {
-            opacity:.8;
-          }
-
           .empty {
             opacity:.55;
             font-style:italic;
@@ -1578,18 +2057,15 @@ class HaIotMap extends HTMLElement {
 
             border-top:
               1px solid
-              var(--divider-color);
-          }
-
-          .filtered-note {
-            font-size:12px;
-            opacity:.65;
-            padding:8px 0 4px 0;
+              var(
+                --divider-color
+              );
           }
 
           @media (
             max-width:900px
           ) {
+
             .iot-header {
               align-items:flex-start;
               flex-direction:column;
@@ -1632,7 +2108,7 @@ class HaIotMap extends HTMLElement {
                   ${
                     this._autoUpdate
                       ? "auto-on"
-                      : "auto-off"
+                      : ""
                   }
                 "
                 id="iot-auto-update"
@@ -1653,6 +2129,43 @@ class HaIotMap extends HTMLElement {
               </button>
 
             </div>
+
+          </div>
+
+          <div
+            class="
+              setup
+              ${
+                missingLabels.length
+                  ? "setup-warn"
+                  : "setup-ok"
+              }
+            "
+          >
+
+            ${
+              missingLabels.length
+                ? this._isAdmin
+                  ? `Shared label setup incomplete: ${this._escapeHtml(
+                      missingLabels.join(
+                        ", "
+                      )
+                    )}`
+                  : `Read-only mode: an administrator must open HA IoT Map once to initialize shared classifications.`
+                : `Shared HA classification storage ready${
+                    this._isAdmin
+                      ? ""
+                      : " • read-only user"
+                  }`
+            }
+
+            ${
+              this._setupMessage
+                ? `<br>${this._escapeHtml(
+                    this._setupMessage
+                  )}`
+                : ""
+            }
 
           </div>
 
@@ -1700,34 +2213,48 @@ class HaIotMap extends HTMLElement {
 
           </div>
 
-          ${this._renderAssigned(
-            groups
-          )}
+          ${
+            this._renderAssigned(
+              groups
+            )
+          }
 
-          ${this._renderSection(
-            "Unassigned",
-            groups.unassigned
-          )}
+          ${
+            this._renderSection(
+              "Unassigned",
+              groups.unassigned
+            )
+          }
 
-          ${this._renderSection(
-            "Floating / Mobile",
-            groups.floating
-          )}
+          ${
+            this._renderSection(
+              "Floating / Mobile",
+              groups.floating
+            )
+          }
 
-          ${this._renderIgnoredSection(
-            groups.ignored
-          )}
+          ${
+            this._renderCollapsedSection(
+              "Ignored devices",
+              groups.ignored,
+              "Devices explicitly classified as Ignored."
+            )
+          }
 
-          ${this._renderFilteredSection(
-            groups.filtered
-          )}
+          ${
+            this._renderCollapsedSection(
+              "Filtered / software-only",
+              groups.filtered,
+              "Automatically filtered. Set one to Fixed or Floating to force it into the IoT inventory."
+            )
+          }
 
           <div class="special-section">
 
             <details>
 
               <summary>
-                Discovery diagnostics
+                Shared storage diagnostics
               </summary>
 
               <div
@@ -1738,6 +2265,45 @@ class HaIotMap extends HTMLElement {
                   line-height:1.6;
                 "
               >
+
+                Classification backend:
+                Home Assistant Labels
+
+                <br>
+
+                IoT Fixed:
+                ${this._escapeHtml(
+                  this._labelIds.fixed ||
+                  "missing"
+                )}
+
+                <br>
+
+                IoT Floating:
+                ${this._escapeHtml(
+                  this._labelIds.floating ||
+                  "missing"
+                )}
+
+                <br>
+
+                IoT Ignored:
+                ${this._escapeHtml(
+                  this._labelIds.ignored ||
+                  "missing"
+                )}
+
+                <br>
+
+                User:
+                ${
+                  this._isAdmin
+                    ? "Administrator"
+                    : "Non-admin / read-only editing"
+                }
+
+                <br>
+
                 Raw HA records:
                 ${rawInventory.length}
 
@@ -1745,16 +2311,6 @@ class HaIotMap extends HTMLElement {
 
                 After MAC deduplication:
                 ${inventory.length}
-
-                <br>
-
-                Standalone trackers:
-                ${standaloneTrackerCount}
-
-                <br>
-
-                Auto-filtered software:
-                ${groups.filtered.length}
 
               </div>
 
@@ -1769,13 +2325,13 @@ class HaIotMap extends HTMLElement {
               font-size:11px;
             "
           >
-            HA IoT Map v0.6
-            • HA ${
-              this._escapeHtml(
-                this._hass.config
-                  .version || ""
-              )
-            }
+            HA IoT Map v0.7
+            • HA
+            ${this._escapeHtml(
+              this._hass.config
+                .version ||
+              ""
+            )}
           </div>
 
         </div>
@@ -1787,14 +2343,11 @@ class HaIotMap extends HTMLElement {
   }
 
   _attachHandlers() {
-    const areaSelects =
-      this.querySelectorAll(
-        "select[data-iot-area]"
-      );
-
     for (
       const select
-      of areaSelects
+      of this.querySelectorAll(
+        "select[data-iot-area]"
+      )
     ) {
       select.addEventListener(
         "change",
@@ -1817,14 +2370,11 @@ class HaIotMap extends HTMLElement {
       );
     }
 
-    const classSelects =
-      this.querySelectorAll(
-        "select[data-iot-classification]"
-      );
-
     for (
       const select
-      of classSelects
+      of this.querySelectorAll(
+        "select[data-iot-classification]"
+      )
     ) {
       select.addEventListener(
         "change",
@@ -1836,6 +2386,9 @@ class HaIotMap extends HTMLElement {
           const value =
             event.target.value;
 
+          event.target.disabled =
+            true;
+
           this._setClassification(
             itemId,
             value
@@ -1844,31 +2397,21 @@ class HaIotMap extends HTMLElement {
       );
     }
 
-    const autoButton =
-      this.querySelector(
-        "#iot-auto-update"
-      );
+    this.querySelector(
+      "#iot-auto-update"
+    )?.addEventListener(
+      "click",
+      () =>
+        this._toggleAutoUpdate()
+    );
 
-    if (autoButton) {
-      autoButton.addEventListener(
-        "click",
-        () =>
-          this._toggleAutoUpdate()
-      );
-    }
-
-    const refreshButton =
-      this.querySelector(
-        "#iot-refresh-now"
-      );
-
-    if (refreshButton) {
-      refreshButton.addEventListener(
-        "click",
-        () =>
-          this._manualRefresh()
-      );
-    }
+    this.querySelector(
+      "#iot-refresh-now"
+    )?.addEventListener(
+      "click",
+      () =>
+        this._manualRefresh()
+    );
   }
 
   _renderAssigned(groups) {
@@ -1876,14 +2419,17 @@ class HaIotMap extends HTMLElement {
       [
         ...groups.areas.entries()
       ].sort(
-        (a, b) =>
+        (
+          a,
+          b
+        ) =>
           a[0].localeCompare(
             b[0]
           )
       );
 
     if (
-      areas.length === 0
+      !areas.length
     ) {
       return `
         <div class="section">
@@ -1907,31 +2453,33 @@ class HaIotMap extends HTMLElement {
           Assigned
         </div>
 
-        ${areas.map(
-          ([
-            areaName,
-            devices
-          ]) => `
+        ${
+          areas.map(
+            (
+              [
+                areaName,
+                devices
+              ]
+            ) => `
+              <div class="area-title">
+                ${this._escapeHtml(
+                  areaName
+                )}
+              </div>
 
-            <div class="area-title">
-              ${this._escapeHtml(
-                areaName
-              )}
-            </div>
-
-            ${
-              devices
-                .map(
-                  device =>
-                    this._renderDevice(
-                      device
-                    )
-                )
-                .join("")
-            }
-
-          `
-        ).join("")}
+              ${
+                devices
+                  .map(
+                    device =>
+                      this._renderDevice(
+                        device
+                      )
+                  )
+                  .join("")
+              }
+            `
+          ).join("")
+        }
 
       </div>
     `;
@@ -1971,8 +2519,10 @@ class HaIotMap extends HTMLElement {
     `;
   }
 
-  _renderIgnoredSection(
-    devices
+  _renderCollapsedSection(
+    title,
+    devices,
+    note
   ) {
     return `
       <div class="special-section">
@@ -1980,78 +2530,40 @@ class HaIotMap extends HTMLElement {
         <details>
 
           <summary>
-            Ignored devices
+            ${this._escapeHtml(
+              title
+            )}
             (${devices.length})
           </summary>
 
-          <div style="padding-top:8px">
-
-            ${
-              devices.length
-                ? devices
-                    .map(
-                      device =>
-                        this._renderDevice(
-                          device
-                        )
-                    )
-                    .join("")
-                : `
-                  <div class="empty">
-                    Nothing ignored.
-                  </div>
-                `
-            }
-
+          <div
+            style="
+              padding:8px 0 4px;
+              opacity:.65;
+              font-size:12px;
+            "
+          >
+            ${this._escapeHtml(
+              note
+            )}
           </div>
 
-        </details>
-
-      </div>
-    `;
-  }
-
-  _renderFilteredSection(
-    devices
-  ) {
-    return `
-      <div class="special-section">
-
-        <details>
-
-          <summary>
-            Filtered / software-only
-            (${devices.length})
-          </summary>
-
-          <div class="filtered-note">
-            These objects were automatically
-            filtered because they do not look
-            like physical IoT/network devices.
-            Set one to Fixed or Floating to
-            force it into the main inventory.
-          </div>
-
-          <div>
-
-            ${
-              devices.length
-                ? devices
-                    .map(
-                      device =>
-                        this._renderDevice(
-                          device
-                        )
-                    )
-                    .join("")
-                : `
-                  <div class="empty">
-                    Nothing filtered.
-                  </div>
-                `
-            }
-
-          </div>
+          ${
+            devices.length
+              ? devices
+                  .map(
+                    device =>
+                      this._renderDevice(
+                        device
+                      )
+                  )
+                  .join("")
+              : `
+                <div class="empty">
+                  Nothing here.
+                </div>
+              `
+          }
 
         </details>
 
@@ -2074,11 +2586,12 @@ class HaIotMap extends HTMLElement {
           ${
             stored === "ignored"
               ? "classification-ignored"
-              : stored === "floating"
-                ? "classification-floating"
-                : stored === "auto"
-                  ? "classification-auto"
-                  : ""
+              : ""
+          }
+          ${
+            stored === "floating"
+              ? "classification-floating"
+              : ""
           }
         "
         data-iot-classification="${
@@ -2086,6 +2599,11 @@ class HaIotMap extends HTMLElement {
             device.id
           )
         }"
+        ${
+          !this._isAdmin
+            ? "disabled"
+            : ""
+        }
       >
 
         <option
@@ -2142,7 +2660,10 @@ class HaIotMap extends HTMLElement {
     const sortedAreas =
       [...this._areas]
         .sort(
-          (a, b) =>
+          (
+            a,
+            b
+          ) =>
             a.name.localeCompare(
               b.name
             )
@@ -2164,6 +2685,11 @@ class HaIotMap extends HTMLElement {
             device.id
           )
         }"
+        ${
+          !this._isAdmin
+            ? "disabled"
+            : ""
+        }
       >
 
         <option
@@ -2177,37 +2703,43 @@ class HaIotMap extends HTMLElement {
           Unassigned
         </option>
 
-        ${sortedAreas.map(
-          area => `
-            <option
-              value="${
-                this._escapeHtml(
+        ${
+          sortedAreas.map(
+            area => `
+              <option
+                value="${
+                  this._escapeHtml(
+                    area.area_id
+                  )
+                }"
+                ${
+                  device.areaId ===
                   area.area_id
-                )
-              }"
-              ${
-                device.areaId ===
-                area.area_id
-                  ? "selected"
-                  : ""
-              }
-            >
-              ${this._escapeHtml(
-                area.name
-              )}
-            </option>
-          `
-        ).join("")}
+                    ? "selected"
+                    : ""
+                }
+              >
+                ${this._escapeHtml(
+                  area.name
+                )}
+              </option>
+            `
+          ).join("")
+        }
 
       </select>
     `;
   }
 
-  _renderDevice(device) {
+  _renderDevice(
+    device
+  ) {
     const networkParts =
       [];
 
-    if (device.ip) {
+    if (
+      device.ip
+    ) {
       networkParts.push(
         this._escapeHtml(
           device.ip
@@ -2215,7 +2747,9 @@ class HaIotMap extends HTMLElement {
       );
     }
 
-    if (device.mac) {
+    if (
+      device.mac
+    ) {
       networkParts.push(
         this._escapeHtml(
           device.mac
@@ -2223,7 +2757,9 @@ class HaIotMap extends HTMLElement {
       );
     }
 
-    if (device.hostname) {
+    if (
+      device.hostname
+    ) {
       networkParts.push(
         this._escapeHtml(
           device.hostname
@@ -2244,7 +2780,9 @@ class HaIotMap extends HTMLElement {
       );
     }
 
-    if (device.model) {
+    if (
+      device.model
+    ) {
       hardwareParts.push(
         this._escapeHtml(
           device.model
@@ -2461,7 +2999,7 @@ if (
 }
 
 console.info(
-  "%c HA IoT Map %c v0.6 ",
+  "%c HA IoT Map %c v0.7 ",
   "background:#03a9f4;color:white;font-weight:bold;",
   "background:#333;color:white;"
 );
