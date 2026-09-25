@@ -1,6 +1,6 @@
 import {
   HaIotMapCore
-} from "./ha-iot-map-core.js?v=3";
+} from "./ha-iot-map-core.js?v=4";
 
 
 class HaIotMapManager extends HTMLElement {
@@ -27,6 +27,12 @@ class HaIotMapManager extends HTMLElement {
 
     this._autoRefreshInterval =
       5000;
+
+    this._sortMode =
+      "name";
+
+    this._offlineFilter =
+      "all";
   }
 
 
@@ -240,6 +246,420 @@ class HaIotMapManager extends HTMLElement {
   }
 
 
+  async _changeFriendlyName(
+    itemId,
+    currentName,
+    currentUserName
+  ) {
+    const value =
+      prompt(
+        "Friendly display name\n\nThis changes only the Home Assistant display name. Entity IDs, MQTT topics, unique IDs, MAC addresses and hostnames are not changed.\n\nLeave blank to restore the integration/original name.",
+        currentUserName ||
+        currentName ||
+        ""
+      );
+
+    if (
+      value === null
+    ) {
+      return;
+    }
+
+    try {
+      await this._core.setFriendlyName(
+        itemId,
+        value
+      );
+
+      this._render();
+
+    } catch (err) {
+      console.error(
+        "Friendly name update failed",
+        err
+      );
+
+      alert(
+        err?.message ||
+        String(err)
+      );
+
+      this._render();
+    }
+  }
+
+
+  _formatTimestamp(
+    timestamp
+  ) {
+    if (
+      !Number.isFinite(
+        timestamp
+      )
+    ) {
+      return "Unavailable";
+    }
+
+    try {
+      return new Intl.DateTimeFormat(
+        undefined,
+        {
+          year:
+            "numeric",
+
+          month:
+            "2-digit",
+
+          day:
+            "2-digit",
+
+          hour:
+            "2-digit",
+
+          minute:
+            "2-digit"
+        }
+      ).format(
+        new Date(
+          timestamp
+        )
+      );
+
+    } catch {
+      return new Date(
+        timestamp
+      ).toLocaleString();
+    }
+  }
+
+
+  _formatAge(
+    timestamp
+  ) {
+    if (
+      !Number.isFinite(
+        timestamp
+      )
+    ) {
+      return "";
+    }
+
+    const delta =
+      Math.max(
+        0,
+        Date.now() -
+        timestamp
+      );
+
+    const minutes =
+      Math.floor(
+        delta /
+        60000
+      );
+
+    if (
+      minutes <
+      60
+    ) {
+      return `${minutes} min ago`;
+    }
+
+    const hours =
+      Math.floor(
+        minutes /
+        60
+      );
+
+    if (
+      hours <
+      24
+    ) {
+      return `${hours} h ago`;
+    }
+
+    const days =
+      Math.floor(
+        hours /
+        24
+      );
+
+    if (
+      days <
+      60
+    ) {
+      return `${days} d ago`;
+    }
+
+    const months =
+      Math.floor(
+        days /
+        30.44
+      );
+
+    if (
+      months <
+      24
+    ) {
+      return `${months} mo ago`;
+    }
+
+    const years =
+      Math.floor(
+        days /
+        365.25
+      );
+
+    return `${years} y ago`;
+  }
+
+
+  _passesOfflineFilter(
+    device
+  ) {
+    if (
+      this._offlineFilter ===
+      "all"
+    ) {
+      return true;
+    }
+
+    if (
+      device.online
+    ) {
+      return false;
+    }
+
+    if (
+      this._offlineFilter ===
+      "offline"
+    ) {
+      return true;
+    }
+
+    const match =
+      /^offline_(\d+)$/.exec(
+        this._offlineFilter
+      );
+
+    if (!match) {
+      return true;
+    }
+
+    const days =
+      Number(
+        match[1]
+      );
+
+    const reference =
+      device.offlineSinceTs ||
+      device.lastSeenTs;
+
+    if (
+      !Number.isFinite(
+        reference
+      )
+    ) {
+      return false;
+    }
+
+    return (
+      Date.now() -
+      reference
+    ) >=
+      days *
+      86400000;
+  }
+
+
+  _sortDevices(
+    devices
+  ) {
+    const result =
+      [...devices];
+
+    const nameSort =
+      (
+        a,
+        b
+      ) =>
+        String(
+          a.name ||
+          ""
+        ).localeCompare(
+          String(
+            b.name ||
+            ""
+          )
+        );
+
+    if (
+      this._sortMode ===
+      "last_seen"
+    ) {
+      result.sort(
+        (
+          a,
+          b
+        ) => {
+          const at =
+            Number.isFinite(
+              a.lastSeenTs
+            )
+              ? a.lastSeenTs
+              : -Infinity;
+
+          const bt =
+            Number.isFinite(
+              b.lastSeenTs
+            )
+              ? b.lastSeenTs
+              : -Infinity;
+
+          return (
+            bt -
+            at
+          ) ||
+          nameSort(
+            a,
+            b
+          );
+        }
+      );
+
+      return result;
+    }
+
+    if (
+      this._sortMode ===
+      "offline_longest"
+    ) {
+      result.sort(
+        (
+          a,
+          b
+        ) => {
+          if (
+            a.online !==
+            b.online
+          ) {
+            return a.online
+              ? 1
+              : -1;
+          }
+
+          const at =
+            Number.isFinite(
+              a.offlineSinceTs
+            )
+              ? a.offlineSinceTs
+              : (
+                  Number.isFinite(
+                    a.lastSeenTs
+                  )
+                    ? a.lastSeenTs
+                    : Infinity
+                );
+
+          const bt =
+            Number.isFinite(
+              b.offlineSinceTs
+            )
+              ? b.offlineSinceTs
+              : (
+                  Number.isFinite(
+                    b.lastSeenTs
+                  )
+                    ? b.lastSeenTs
+                    : Infinity
+                );
+
+          return (
+            at -
+            bt
+          ) ||
+          nameSort(
+            a,
+            b
+          );
+        }
+      );
+
+      return result;
+    }
+
+    result.sort(
+      nameSort
+    );
+
+    return result;
+  }
+
+
+  _prepareGroups(
+    groups
+  ) {
+    const filterAndSort =
+      list =>
+        this._sortDevices(
+          list.filter(
+            device =>
+              this._passesOfflineFilter(
+                device
+              )
+          )
+        );
+
+    const areas =
+      new Map();
+
+    for (
+      const [
+        areaName,
+        devices
+      ]
+      of groups.areas.entries()
+    ) {
+      const prepared =
+        filterAndSort(
+          devices
+        );
+
+      if (
+        prepared.length
+      ) {
+        areas.set(
+          areaName,
+          prepared
+        );
+      }
+    }
+
+    return {
+      areas,
+
+      unassigned:
+        filterAndSort(
+          groups.unassigned
+        ),
+
+      floating:
+        filterAndSort(
+          groups.floating
+        ),
+
+      ignored:
+        filterAndSort(
+          groups.ignored
+        ),
+
+      filtered:
+        filterAndSort(
+          groups.filtered
+        )
+    };
+  }
+
+
   _render() {
     if (
       !this._loaded
@@ -253,13 +673,14 @@ class HaIotMapManager extends HTMLElement {
     const {
       inventory,
       mergedAwayCount,
-      groups
+      groups:
+        rawGroups
     } =
       snapshot;
 
     const assignedCount =
       [
-        ...groups.areas.values()
+        ...rawGroups.areas.values()
       ].reduce(
         (
           total,
@@ -272,8 +693,30 @@ class HaIotMapManager extends HTMLElement {
 
     const visibleCount =
       assignedCount +
+      rawGroups.unassigned.length +
+      rawGroups.floating.length;
+
+    const groups =
+      this._prepareGroups(
+        rawGroups
+      );
+
+    const shownCount =
+      [
+        ...groups.areas.values()
+      ].reduce(
+        (
+          total,
+          list
+        ) =>
+          total +
+          list.length,
+        0
+      ) +
       groups.unassigned.length +
-      groups.floating.length;
+      groups.floating.length +
+      groups.ignored.length +
+      groups.filtered.length;
 
     this.innerHTML = `
       <ha-card>
@@ -303,6 +746,46 @@ class HaIotMapManager extends HTMLElement {
           .controls {
             display:flex;
             gap:8px;
+            align-items:center;
+            flex-wrap:wrap;
+          }
+
+
+          .inventory-tools {
+            display:flex;
+            gap:10px;
+            align-items:center;
+            flex-wrap:wrap;
+            margin-bottom:18px;
+            padding:10px 12px;
+            border:1px solid var(--divider-color);
+            border-radius:9px;
+            background:rgba(255,255,255,.025);
+          }
+
+
+          .tool-label {
+            font-size:11px;
+            opacity:.6;
+            text-transform:uppercase;
+            letter-spacing:.04em;
+          }
+
+
+          .tool-select {
+            min-width:170px;
+            padding:7px 9px;
+            border-radius:7px;
+            border:1px solid var(--divider-color);
+            background:var(--card-background-color);
+            color:var(--primary-text-color);
+          }
+
+
+          .shown-count {
+            margin-left:auto;
+            font-size:11px;
+            opacity:.55;
           }
 
 
@@ -520,6 +1003,55 @@ class HaIotMapManager extends HTMLElement {
           .device-name {
             font-weight:
               600;
+          }
+
+
+          .rename-button {
+            width:24px;
+            height:24px;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            padding:0;
+            border:1px solid transparent;
+            border-radius:50%;
+            background:transparent;
+            color:var(--secondary-text-color);
+            cursor:pointer;
+          }
+
+
+          .rename-button:hover {
+            border-color:#00a8ff;
+            color:#00a8ff;
+            background:rgba(0,168,255,.08);
+          }
+
+
+          .rename-button ha-icon {
+            --mdc-icon-size:15px;
+          }
+
+
+          .activity-line {
+            display:flex;
+            flex-wrap:wrap;
+            gap:6px 10px;
+            margin-top:5px;
+            font-size:11px;
+            line-height:1.4;
+            opacity:.72;
+          }
+
+
+          .activity-offline {
+            color:var(--warning-color,#ff9800);
+            opacity:1;
+          }
+
+
+          .activity-source {
+            opacity:.55;
           }
 
 
@@ -792,6 +1324,91 @@ class HaIotMapManager extends HTMLElement {
           </div>
 
 
+          <div class="inventory-tools">
+
+            <div class="tool-label">
+              Sort
+            </div>
+
+            <select
+              id="iot-sort-mode"
+              class="tool-select"
+            >
+              <option
+                value="name"
+                ${this._sortMode === "name" ? "selected" : ""}
+              >
+                Name
+              </option>
+
+              <option
+                value="last_seen"
+                ${this._sortMode === "last_seen" ? "selected" : ""}
+              >
+                Last seen
+              </option>
+
+              <option
+                value="offline_longest"
+                ${this._sortMode === "offline_longest" ? "selected" : ""}
+              >
+                Offline longest
+              </option>
+            </select>
+
+
+            <div class="tool-label">
+              Show
+            </div>
+
+            <select
+              id="iot-offline-filter"
+              class="tool-select"
+            >
+              <option
+                value="all"
+                ${this._offlineFilter === "all" ? "selected" : ""}
+              >
+                All devices
+              </option>
+
+              <option
+                value="offline"
+                ${this._offlineFilter === "offline" ? "selected" : ""}
+              >
+                Offline only
+              </option>
+
+              <option
+                value="offline_7"
+                ${this._offlineFilter === "offline_7" ? "selected" : ""}
+              >
+                Offline &gt; 7 days
+              </option>
+
+              <option
+                value="offline_30"
+                ${this._offlineFilter === "offline_30" ? "selected" : ""}
+              >
+                Offline &gt; 30 days
+              </option>
+
+              <option
+                value="offline_90"
+                ${this._offlineFilter === "offline_90" ? "selected" : ""}
+              >
+                Offline &gt; 90 days
+              </option>
+            </select>
+
+
+            <div class="shown-count">
+              Showing ${shownCount} records
+            </div>
+
+          </div>
+
+
           <div class="summary">
 
             ${
@@ -812,7 +1429,7 @@ class HaIotMapManager extends HTMLElement {
 
             ${
               this._summaryBox(
-                groups.unassigned.length,
+                rawGroups.unassigned.length,
                 "Unassigned"
               )
             }
@@ -820,7 +1437,7 @@ class HaIotMapManager extends HTMLElement {
 
             ${
               this._summaryBox(
-                groups.floating.length,
+                rawGroups.floating.length,
                 "Floating"
               )
             }
@@ -828,7 +1445,7 @@ class HaIotMapManager extends HTMLElement {
 
             ${
               this._summaryBox(
-                groups.ignored.length,
+                rawGroups.ignored.length,
                 "Ignored"
               )
             }
@@ -836,7 +1453,7 @@ class HaIotMapManager extends HTMLElement {
 
             ${
               this._summaryBox(
-                groups.filtered.length,
+                rawGroups.filtered.length,
                 "Filtered"
               )
             }
@@ -899,8 +1516,8 @@ class HaIotMapManager extends HTMLElement {
             "
           >
 
-            HA IoT Map Manager v0.9.1
-            • Core v0.9
+            HA IoT Map Manager v0.10
+            • Core v0.10
 
           </div>
 
@@ -914,6 +1531,62 @@ class HaIotMapManager extends HTMLElement {
 
 
   _attachHandlers() {
+
+    this.querySelector(
+      "#iot-sort-mode"
+    )?.addEventListener(
+      "change",
+      event => {
+        this._sortMode =
+          event.target.value;
+
+        this._render();
+      }
+    );
+
+
+    this.querySelector(
+      "#iot-offline-filter"
+    )?.addEventListener(
+      "change",
+      event => {
+        this._offlineFilter =
+          event.target.value;
+
+        this._render();
+      }
+    );
+
+
+    for (
+      const button
+      of this.querySelectorAll(
+        "[data-iot-rename]"
+      )
+    ) {
+      button.addEventListener(
+        "click",
+        () => {
+          const itemId =
+            button.dataset.iotRename;
+
+          const currentName =
+            button.dataset.currentName ||
+            "";
+
+          const currentUserName =
+            button.dataset.currentUserName ||
+            "";
+
+          this._changeFriendlyName(
+            itemId,
+            currentName,
+            currentUserName
+          );
+        }
+      );
+    }
+
 
     for (
       const select
@@ -1077,6 +1750,38 @@ class HaIotMapManager extends HTMLElement {
     }
 
 
+    const lastSeenText =
+      this._formatTimestamp(
+        device.lastSeenTs
+      );
+
+
+    const lastSeenAge =
+      this._formatAge(
+        device.lastSeenTs
+      );
+
+
+    const offlineSinceText =
+      this._formatTimestamp(
+        device.offlineSinceTs
+      );
+
+
+    const offlineAge =
+      this._formatAge(
+        device.offlineSinceTs
+      );
+
+
+    const sourceText =
+      device.lastSeenSource?.startsWith(
+        "reported:"
+      )
+        ? "device reported"
+        : "HA state activity";
+
+
     return `
       <div class="device">
 
@@ -1115,6 +1820,39 @@ class HaIotMapManager extends HTMLElement {
               }
 
             </div>
+
+
+            ${
+              this._core.isAdmin
+                ? `
+                  <button
+                    class="rename-button"
+                    data-iot-rename="${
+                      this._escapeHtml(
+                        device.id
+                      )
+                    }"
+                    data-current-name="${
+                      this._escapeHtml(
+                        device.name ||
+                        ""
+                      )
+                    }"
+                    data-current-user-name="${
+                      this._escapeHtml(
+                        device.userName ||
+                        ""
+                      )
+                    }"
+                    title="Rename friendly display name"
+                  >
+                    <ha-icon
+                      icon="mdi:pencil"
+                    ></ha-icon>
+                  </button>
+                `
+                : ""
+            }
 
 
             <span class="category-auto">
@@ -1163,6 +1901,82 @@ class HaIotMapManager extends HTMLElement {
               1
                 ? "y"
                 : "ies"
+            }
+
+          </div>
+
+
+          <div
+            class="
+              activity-line
+              ${
+                device.online
+                  ? ""
+                  : "activity-offline"
+              }
+            "
+          >
+
+            ${
+              device.online
+                ? `
+                  <span>
+                    Last seen:
+                    ${this._escapeHtml(
+                      lastSeenText
+                    )}
+                    ${
+                      lastSeenAge
+                        ? `(${this._escapeHtml(
+                            lastSeenAge
+                          )})`
+                        : ""
+                    }
+                  </span>
+                `
+                : `
+                  <span>
+                    Offline since:
+                    ${this._escapeHtml(
+                      offlineSinceText
+                    )}
+                    ${
+                      offlineAge
+                        ? `(${this._escapeHtml(
+                            offlineAge
+                          )})`
+                        : ""
+                    }
+                  </span>
+
+                  <span>
+                    Last seen:
+                    ${this._escapeHtml(
+                      lastSeenText
+                    )}
+                    ${
+                      lastSeenAge
+                        ? `(${this._escapeHtml(
+                            lastSeenAge
+                          )})`
+                        : ""
+                    }
+                  </span>
+                `
+            }
+
+            ${
+              Number.isFinite(
+                device.lastSeenTs
+              )
+                ? `
+                  <span class="activity-source">
+                    ${this._escapeHtml(
+                      sourceText
+                    )}
+                  </span>
+                `
+                : ""
             }
 
           </div>
@@ -1830,7 +2644,7 @@ if (
 
 
 console.info(
-  "%c HA IoT Map Manager %c v0.9.1 ",
+  "%c HA IoT Map Manager %c v0.10 ",
   "background:#03a9f4;color:white;font-weight:bold;",
   "background:#333;color:white;"
 );
