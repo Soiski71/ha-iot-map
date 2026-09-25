@@ -13,6 +13,7 @@ class HaIotFloorplan extends HTMLElement {
 
     this._loaded = false;
     this._loading = false;
+
     this._editMode = false;
 
     this._dragState = null;
@@ -23,13 +24,6 @@ class HaIotFloorplan extends HTMLElement {
 
     this._lastRender = 0;
 
-    /*
-     * v0.4 state:
-     *
-     * floors
-     * area -> floor assignments
-     * separate room geometry per floor
-     */
     this._stateKey =
       "ha_iot_floorplan_state_v04";
 
@@ -39,10 +33,6 @@ class HaIotFloorplan extends HTMLElement {
     this._state =
       this._loadState();
 
-    /*
-     * Images are stored in IndexedDB.
-     * One image per floor.
-     */
     this._backgroundUrls = {};
     this._backgroundBlobs = {};
 
@@ -70,10 +60,6 @@ class HaIotFloorplan extends HTMLElement {
       return;
     }
 
-    /*
-     * Don't rebuild while user is editing
-     * or has a popup open.
-     */
     if (
       !this._loaded ||
       this._editMode ||
@@ -141,16 +127,12 @@ class HaIotFloorplan extends HTMLElement {
               color:var(--error-color);
             "
           >
-
             Initialization failed.
-
             <br><br>
-
             ${this._escapeHtml(
               err?.message ||
               String(err)
             )}
-
           </div>
 
         </ha-card>
@@ -167,11 +149,6 @@ class HaIotFloorplan extends HTMLElement {
 
 
   _defaultState() {
-
-    /*
-     * Migrate old v0.2/v0.3 room geometry
-     * to the new Ground floor.
-     */
 
     let legacyLayout = {};
 
@@ -212,7 +189,13 @@ class HaIotFloorplan extends HTMLElement {
             [],
 
           layout:
-            legacyLayout || {}
+            legacyLayout || {},
+
+          /*
+           * NEW v0.4.1
+           */
+          maxHeight:
+            70
         }
 
       ]
@@ -244,10 +227,6 @@ class HaIotFloorplan extends HTMLElement {
           state.floors.length
         ) {
 
-          /*
-           * Repair missing optional fields.
-           */
-
           for (
             const floor
             of state.floors
@@ -267,6 +246,30 @@ class HaIotFloorplan extends HTMLElement {
               "object"
                 ? floor.layout
                 : {};
+
+
+            /*
+             * v0.4 -> v0.4.1 migration
+             */
+            if (
+              !Number.isFinite(
+                floor.maxHeight
+              )
+            ) {
+
+              floor.maxHeight =
+                70;
+            }
+
+
+            floor.maxHeight =
+              Math.min(
+                90,
+                Math.max(
+                  40,
+                  floor.maxHeight
+                )
+              );
           }
 
           return state;
@@ -302,15 +305,11 @@ class HaIotFloorplan extends HTMLElement {
     if (
       !this._state.floors?.length
     ) {
+
       this._state =
         this._defaultState();
     }
 
-
-    /*
-     * If selected floor disappeared,
-     * select first remaining one.
-     */
 
     if (
       !this._state.floors.some(
@@ -328,14 +327,25 @@ class HaIotFloorplan extends HTMLElement {
 
 
     /*
-     * First v0.4 run:
-     *
-     * preserve current result by assigning
-     * every existing HA Area to Ground floor.
-     *
-     * After this migration NEW Areas won't
-     * be assigned automatically.
+     * Make sure every floor has
+     * a height setting.
      */
+    for (
+      const floor
+      of this._state.floors
+    ) {
+
+      if (
+        !Number.isFinite(
+          floor.maxHeight
+        )
+      ) {
+
+        floor.maxHeight =
+          70;
+      }
+    }
+
 
     if (
       !this._state.initialized
@@ -463,7 +473,13 @@ class HaIotFloorplan extends HTMLElement {
         [],
 
       layout:
-        {}
+        {},
+
+      /*
+       * NEW floors default to 70vh.
+       */
+      maxHeight:
+        70
 
     });
 
@@ -577,10 +593,6 @@ class HaIotFloorplan extends HTMLElement {
     floorId
   ) {
 
-    /*
-     * Remove Area from every floor first.
-     */
-
     for (
       const floor
       of this._state.floors
@@ -594,10 +606,6 @@ class HaIotFloorplan extends HTMLElement {
         );
     }
 
-
-    /*
-     * Empty floorId = unassigned.
-     */
 
     if (floorId) {
 
@@ -620,11 +628,110 @@ class HaIotFloorplan extends HTMLElement {
 
     this._saveState();
 
+    this._render();
+  }
+
+
+  /*
+   * =================================================
+   * NEW v0.4.1 HEIGHT CONTROL
+   * =================================================
+   */
+
+
+  _setFloorHeight(
+    value,
+    save = true
+  ) {
+
+    const floor =
+      this._activeFloor();
+
+
+    if (!floor) {
+      return;
+    }
+
+
+    const numeric =
+      Math.min(
+        90,
+        Math.max(
+          40,
+          Number(value) ||
+          70
+        )
+      );
+
+
+    floor.maxHeight =
+      numeric;
+
+
     /*
-     * Keep area manager open.
+     * Update live without rebuilding
+     * the whole card.
      */
 
-    this._render();
+    const floorplan =
+      this.querySelector(
+        "#floorplan"
+      );
+
+
+    const stage =
+      this.querySelector(
+        "#plan-stage"
+      );
+
+
+    const image =
+      this.querySelector(
+        ".floorplan-image"
+      );
+
+
+    if (floorplan) {
+
+      floorplan.style
+        .setProperty(
+          "--plan-max-height",
+          `${numeric}vh`
+        );
+    }
+
+
+    if (stage) {
+
+      stage.style.maxHeight =
+        `${numeric}vh`;
+    }
+
+
+    if (image) {
+
+      image.style.maxHeight =
+        `${numeric}vh`;
+    }
+
+
+    const label =
+      this.querySelector(
+        "#height-value"
+      );
+
+
+    if (label) {
+
+      label.textContent =
+        `${numeric} vh`;
+    }
+
+
+    if (save) {
+
+      this._saveState();
+    }
   }
 
 
@@ -871,13 +978,6 @@ class HaIotFloorplan extends HTMLElement {
         ._openBackgroundDb();
 
 
-    /*
-     * v0.3 migration:
-     *
-     * old key "background"
-     * becomes Ground floor image.
-     */
-
     const groundKey =
       this._backgroundKey(
         "ground"
@@ -1084,11 +1184,6 @@ class HaIotFloorplan extends HTMLElement {
 
       ||
 
-      /*
-       * Legacy YAML background only applies
-       * to Ground floor.
-       */
-
       (
         floor.id ===
         "ground"
@@ -1183,13 +1278,6 @@ class HaIotFloorplan extends HTMLElement {
         );
     }
 
-
-    /*
-     * We intentionally include HA Areas
-     * with ZERO devices as well.
-     *
-     * They still represent rooms.
-     */
 
     const areas =
       this._core.areas
@@ -1624,6 +1712,11 @@ class HaIotFloorplan extends HTMLElement {
       this._getBackground();
 
 
+    const maxHeight =
+      data.floor.maxHeight ||
+      70;
+
+
     const unassignedCount =
       this._core.areas.filter(
         area =>
@@ -1667,9 +1760,13 @@ class HaIotFloorplan extends HTMLElement {
           .controls,
           .floor-tabs,
           .floor-tools {
+
             display:flex;
+
             gap:7px;
+
             flex-wrap:wrap;
+
             align-items:center;
           }
 
@@ -1704,12 +1801,12 @@ class HaIotFloorplan extends HTMLElement {
 
 
           .floor-tabs {
-            margin-bottom:
-              12px;
+            margin-bottom:12px;
           }
 
 
           .floor-tab {
+
             border-radius:
               999px;
 
@@ -1719,6 +1816,7 @@ class HaIotFloorplan extends HTMLElement {
 
 
           .floor-tab.active {
+
             border-color:
               #00a8ff;
 
@@ -1737,14 +1835,10 @@ class HaIotFloorplan extends HTMLElement {
 
           .add-floor {
 
-            width:
-              31px;
+            width:31px;
+            height:31px;
 
-            height:
-              31px;
-
-            border-radius:
-              50%;
+            border-radius:50%;
 
             border:
               1px solid
@@ -1764,8 +1858,7 @@ class HaIotFloorplan extends HTMLElement {
 
             cursor:pointer;
 
-            font-size:
-              18px;
+            font-size:18px;
           }
 
 
@@ -1775,6 +1868,7 @@ class HaIotFloorplan extends HTMLElement {
 
 
           .button.active {
+
             border-color:
               #00a8ff;
 
@@ -1784,6 +1878,7 @@ class HaIotFloorplan extends HTMLElement {
 
 
           .danger {
+
             border-color:
               var(
                 --error-color,
@@ -1817,19 +1912,111 @@ class HaIotFloorplan extends HTMLElement {
 
 
           /*
-           * PLAN
+           * NEW HEIGHT SLIDER
+           */
+
+          .height-control {
+
+            display:flex;
+
+            align-items:center;
+
+            gap:10px;
+
+            margin:
+              8px 0 12px;
+
+            padding:
+              9px 11px;
+
+            border-radius:
+              8px;
+
+            background:
+              rgba(
+                255,
+                255,
+                255,
+                .035
+              );
+
+            border:
+              1px solid
+              var(
+                --divider-color
+              );
+          }
+
+
+          .height-label {
+
+            min-width:
+              105px;
+
+            font-size:
+              11px;
+
+            font-weight:
+              600;
+          }
+
+
+          .height-slider {
+
+            flex:
+              1;
+
+            max-width:
+              420px;
+
+            accent-color:
+              #00a8ff;
+          }
+
+
+          .height-value {
+
+            min-width:
+              48px;
+
+            font-size:
+              11px;
+
+            color:
+              #00a8ff;
+
+            text-align:right;
+          }
+
+
+          /*
+           * OUTER FLOORPLAN HOLDER
+           *
+           * Always full available width.
+           * Never horizontally scrolls.
            */
 
           .floorplan {
 
-            position:
-              relative;
+            --plan-max-height:
+              ${maxHeight}vh;
 
-            width:
-              100%;
+            position:relative;
 
-            overflow:
-              hidden;
+            width:100%;
+
+            max-height:
+              var(
+                --plan-max-height
+              );
+
+            overflow:hidden;
+
+            display:flex;
+
+            justify-content:center;
+
+            align-items:center;
 
             border:
               1px solid
@@ -1842,19 +2029,38 @@ class HaIotFloorplan extends HTMLElement {
 
             background:
               #05090f;
+          }
 
-            ${
-              background
-                ? ""
-                : `
-                  aspect-ratio:
-                    ${
-                      this._config
-                        .aspect_ratio ||
-                      "16 / 9"
-                    };
-                `
-            }
+
+          /*
+           * CRITICAL v0.4.1 CHANGE
+           *
+           * Image and Area layer are both
+           * inside this stage.
+           *
+           * The Area percentages therefore
+           * reference the ACTUAL displayed
+           * image size rather than the full card.
+           */
+
+          .plan-stage {
+
+            position:relative;
+
+            display:inline-block;
+
+            flex:
+              0 1 auto;
+
+            max-width:
+              100%;
+
+            max-height:
+              var(
+                --plan-max-height
+              );
+
+            line-height:0;
           }
 
 
@@ -1862,9 +2068,20 @@ class HaIotFloorplan extends HTMLElement {
 
             display:block;
 
-            width:100%;
+            width:auto;
 
             height:auto;
+
+            max-width:
+              100%;
+
+            max-height:
+              var(
+                --plan-max-height
+              );
+
+            object-fit:
+              contain;
 
             pointer-events:none;
 
@@ -1872,9 +2089,72 @@ class HaIotFloorplan extends HTMLElement {
           }
 
 
+          /*
+           * No-image canvas.
+           */
+
+          .blank-stage {
+
+            width:
+              min(
+                100%,
+                calc(
+                  var(
+                    --plan-max-height
+                  ) *
+                  16 /
+                  9
+                )
+              );
+
+            aspect-ratio:
+              16 / 9;
+
+            max-height:
+              var(
+                --plan-max-height
+              );
+
+            background-image:
+
+              linear-gradient(
+                to right,
+                rgba(
+                  127,
+                  127,
+                  127,
+                  .07
+                )
+                1px,
+                transparent
+                1px
+              ),
+
+              linear-gradient(
+                to bottom,
+                rgba(
+                  127,
+                  127,
+                  127,
+                  .07
+                )
+                1px,
+                transparent
+                1px
+              );
+
+            background-size:
+              40px 40px;
+          }
+
+
           .area-layer {
+
             position:absolute;
+
             inset:0;
+
+            line-height:normal;
           }
 
 
@@ -1882,13 +2162,11 @@ class HaIotFloorplan extends HTMLElement {
 
             position:absolute;
 
-            box-sizing:
-              border-box;
+            box-sizing:border-box;
 
             overflow:hidden;
 
-            border-radius:
-              9px;
+            border-radius:9px;
 
             border:
               1px solid
@@ -1928,11 +2206,9 @@ class HaIotFloorplan extends HTMLElement {
 
           .area-header {
 
-            height:
-              29px;
+            height:29px;
 
-            box-sizing:
-              border-box;
+            box-sizing:border-box;
 
             display:flex;
 
@@ -1952,11 +2228,9 @@ class HaIotFloorplan extends HTMLElement {
                 .78
               );
 
-            font-size:
-              11px;
+            font-size:11px;
 
-            font-weight:
-              600;
+            font-weight:600;
           }
 
 
@@ -1971,11 +2245,9 @@ class HaIotFloorplan extends HTMLElement {
 
           .area-count {
 
-            font-size:
-              9px;
+            font-size:9px;
 
-            opacity:
-              .5;
+            opacity:.5;
           }
 
 
@@ -2004,8 +2276,7 @@ class HaIotFloorplan extends HTMLElement {
 
             overflow:auto;
 
-            box-sizing:
-              border-box;
+            box-sizing:border-box;
           }
 
 
@@ -2013,11 +2284,9 @@ class HaIotFloorplan extends HTMLElement {
 
             position:relative;
 
-            min-height:
-              61px;
+            min-height:61px;
 
-            border-radius:
-              7px;
+            border-radius:7px;
 
             border:
               1px solid
@@ -2038,8 +2307,7 @@ class HaIotFloorplan extends HTMLElement {
 
             display:flex;
 
-            flex-direction:
-              column;
+            flex-direction:column;
 
             align-items:center;
 
@@ -2051,8 +2319,7 @@ class HaIotFloorplan extends HTMLElement {
 
             text-align:center;
 
-            box-sizing:
-              border-box;
+            box-sizing:border-box;
           }
 
 
@@ -2097,11 +2364,9 @@ class HaIotFloorplan extends HTMLElement {
 
             width:100%;
 
-            font-size:
-              9px;
+            font-size:9px;
 
-            font-weight:
-              600;
+            font-weight:600;
 
             overflow:hidden;
 
@@ -2115,11 +2380,9 @@ class HaIotFloorplan extends HTMLElement {
 
           .item-category {
 
-            font-size:
-              8px;
+            font-size:8px;
 
-            opacity:
-              .5;
+            opacity:.5;
           }
 
 
@@ -2130,11 +2393,8 @@ class HaIotFloorplan extends HTMLElement {
             top:4px;
             right:4px;
 
-            min-width:
-              17px;
-
-            height:
-              17px;
+            min-width:17px;
+            height:17px;
 
             border-radius:
               999px;
@@ -2147,8 +2407,7 @@ class HaIotFloorplan extends HTMLElement {
 
             color:white;
 
-            font-size:
-              9px;
+            font-size:9px;
 
             display:flex;
 
@@ -2165,39 +2424,30 @@ class HaIotFloorplan extends HTMLElement {
             top:5px;
             right:5px;
 
-            width:
-              7px;
+            width:7px;
+            height:7px;
 
-            height:
-              7px;
-
-            border-radius:
-              50%;
+            border-radius:50%;
           }
 
 
           .online {
-            background:
-              #4caf50;
+            background:#4caf50;
           }
 
 
           .offline {
-            background:
-              #777;
+            background:#777;
           }
 
 
           .empty-room {
 
-            padding:
-              10px;
+            padding:10px;
 
-            font-size:
-              10px;
+            font-size:10px;
 
-            opacity:
-              .4;
+            opacity:.4;
           }
 
 
@@ -2210,11 +2460,8 @@ class HaIotFloorplan extends HTMLElement {
             right:0;
             bottom:0;
 
-            width:
-              18px;
-
-            height:
-              18px;
+            width:18px;
+            height:18px;
 
             cursor:
               nwse-resize;
@@ -2262,8 +2509,11 @@ class HaIotFloorplan extends HTMLElement {
 
 
           .floating-title {
+
             font-size:14px;
+
             font-weight:600;
+
             margin-bottom:7px;
           }
 
@@ -2305,6 +2555,7 @@ class HaIotFloorplan extends HTMLElement {
 
           .floating-device
           ha-icon {
+
             --mdc-icon-size:
               16px;
           }
@@ -2312,14 +2563,10 @@ class HaIotFloorplan extends HTMLElement {
 
           .floating-dot {
 
-            width:
-              7px;
+            width:7px;
+            height:7px;
 
-            height:
-              7px;
-
-            border-radius:
-              50%;
+            border-radius:50%;
           }
 
 
@@ -2424,11 +2671,9 @@ class HaIotFloorplan extends HTMLElement {
 
             gap:8px;
 
-            font-size:
-              16px;
+            font-size:16px;
 
-            font-weight:
-              600;
+            font-weight:600;
           }
 
 
@@ -2444,8 +2689,7 @@ class HaIotFloorplan extends HTMLElement {
                 --primary-text-color
               );
 
-            font-size:
-              24px;
+            font-size:24px;
 
             cursor:pointer;
           }
@@ -2460,8 +2704,7 @@ class HaIotFloorplan extends HTMLElement {
               1fr
               auto;
 
-            gap:
-              10px;
+            gap:10px;
 
             align-items:center;
 
@@ -2478,40 +2721,28 @@ class HaIotFloorplan extends HTMLElement {
 
           .modal-device-name {
 
-            font-size:
-              12px;
+            font-size:12px;
 
-            font-weight:
-              600;
+            font-weight:600;
           }
 
 
           .modal-device-details {
 
-            font-size:
-              10px;
+            font-size:10px;
 
-            opacity:
-              .5;
+            opacity:.5;
           }
 
 
           .modal-status {
 
-            width:
-              8px;
+            width:8px;
+            height:8px;
 
-            height:
-              8px;
-
-            border-radius:
-              50%;
+            border-radius:50%;
           }
 
-
-          /*
-           * AREA ASSIGNMENT
-           */
 
           .area-assignment {
 
@@ -2521,8 +2752,7 @@ class HaIotFloorplan extends HTMLElement {
               1fr
               210px;
 
-            gap:
-              12px;
+            gap:12px;
 
             align-items:center;
 
@@ -2539,11 +2769,9 @@ class HaIotFloorplan extends HTMLElement {
 
           .area-name {
 
-            font-size:
-              12px;
+            font-size:12px;
 
-            font-weight:
-              600;
+            font-weight:600;
           }
 
 
@@ -2577,14 +2805,11 @@ class HaIotFloorplan extends HTMLElement {
 
           .footer {
 
-            margin-top:
-              14px;
+            margin-top:14px;
 
-            font-size:
-              10px;
+            font-size:10px;
 
-            opacity:
-              .4;
+            opacity:.4;
           }
 
         </style>
@@ -2800,6 +3025,54 @@ class HaIotFloorplan extends HTMLElement {
                   between floors.
 
                 </div>
+
+
+                <div class="height-control">
+
+                  <div class="height-label">
+                    Floorplan height
+                  </div>
+
+
+                  <span
+                    style="
+                      font-size:10px;
+                      opacity:.45;
+                    "
+                  >
+                    40
+                  </span>
+
+
+                  <input
+                    id="height-slider"
+                    class="height-slider"
+                    type="range"
+                    min="40"
+                    max="90"
+                    step="5"
+                    value="${maxHeight}"
+                  >
+
+
+                  <span
+                    style="
+                      font-size:10px;
+                      opacity:.45;
+                    "
+                  >
+                    90
+                  </span>
+
+
+                  <div
+                    id="height-value"
+                    class="height-value"
+                  >
+                    ${maxHeight} vh
+                  </div>
+
+                </div>
               `
               : ""
           }
@@ -2820,35 +3093,50 @@ class HaIotFloorplan extends HTMLElement {
           >
 
 
-            ${
-              background
-                ? `
-                  <img
-                    class="floorplan-image"
-                    src="${
-                      this._escapeHtml(
-                        background
-                      )
-                    }"
-                    draggable="false"
-                  >
-                `
-                : ""
-            }
+            <div
+              id="plan-stage"
+              class="
+                plan-stage
+                ${
+                  background
+                    ? ""
+                    : "blank-stage"
+                }
+              "
+            >
 
-
-            <div class="area-layer">
 
               ${
-                data.areas
-                  .map(
-                    area =>
-                      this._renderArea(
-                        area
-                      )
-                  )
-                  .join("")
+                background
+                  ? `
+                    <img
+                      class="floorplan-image"
+                      src="${
+                        this._escapeHtml(
+                          background
+                        )
+                      }"
+                      draggable="false"
+                    >
+                  `
+                  : ""
               }
+
+
+              <div class="area-layer">
+
+                ${
+                  data.areas
+                    .map(
+                      area =>
+                        this._renderArea(
+                          area
+                        )
+                    )
+                    .join("")
+                }
+
+              </div>
 
             </div>
 
@@ -2884,7 +3172,7 @@ class HaIotFloorplan extends HTMLElement {
 
           <div class="footer">
 
-            HA IoT Floorplan v0.4
+            HA IoT Floorplan v0.4.1
             •
             ${
               this._escapeHtml(
@@ -2894,6 +3182,8 @@ class HaIotFloorplan extends HTMLElement {
             •
             ${data.areas.length}
             Areas
+            •
+            ${maxHeight}vh
 
           </div>
 
@@ -3103,6 +3393,7 @@ class HaIotFloorplan extends HTMLElement {
 
 
         <div class="item-category">
+
           ${
             item.devices
               .filter(
@@ -3111,7 +3402,9 @@ class HaIotFloorplan extends HTMLElement {
               )
               .length
           }
+
           online
+
         </div>
 
       </div>
@@ -3680,6 +3973,42 @@ class HaIotFloorplan extends HTMLElement {
 
 
     /*
+     * HEIGHT SLIDER
+     */
+
+    const heightSlider =
+      this.querySelector(
+        "#height-slider"
+      );
+
+
+    heightSlider
+      ?.addEventListener(
+        "input",
+        event => {
+
+          this._setFloorHeight(
+            event.target.value,
+            false
+          );
+        }
+      );
+
+
+    heightSlider
+      ?.addEventListener(
+        "change",
+        event => {
+
+          this._setFloorHeight(
+            event.target.value,
+            true
+          );
+        }
+      );
+
+
+    /*
      * AREA ASSIGNMENT
      */
 
@@ -3908,8 +4237,15 @@ class HaIotFloorplan extends HTMLElement {
 
   _getCanvas() {
 
+    /*
+     * IMPORTANT:
+     *
+     * We now calculate geometry against
+     * plan-stage, NOT full-width floorplan.
+     */
+
     return this.querySelector(
-      "#floorplan"
+      "#plan-stage"
     );
   }
 
@@ -4449,7 +4785,7 @@ if (
 
 
 console.info(
-  "%c HA IoT Floorplan %c v0.4 ",
+  "%c HA IoT Floorplan %c v0.4.1 ",
   "background:#00a8ff;color:white;font-weight:bold;",
   "background:#333;color:white;"
 );
