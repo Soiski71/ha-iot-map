@@ -1,6 +1,6 @@
 import {
   HaIotMapCore
-} from "./ha-iot-map-core.js?v=1";
+} from "./ha-iot-map-core.js?v=3";
 
 
 class HaIotFloorplan extends HTMLElement {
