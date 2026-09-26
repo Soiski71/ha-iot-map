@@ -1,6 +1,6 @@
 import {
   HaIotMapCore
-} from "./ha-iot-map-core.js?v=3";
+} from "./ha-iot-map-core.js?v=4";
 
 
 class HaIotFloorplan extends HTMLElement {
@@ -20,6 +20,7 @@ class HaIotFloorplan extends HTMLElement {
     this._pinDragState = null;
 
     this._activeGroup = null;
+    this._activeDeviceKey = null;
     this._areaManagerOpen = false;
     this._colorManagerOpen = false;
 
@@ -90,6 +91,7 @@ class HaIotFloorplan extends HTMLElement {
       !this._loaded ||
       this._editMode ||
       this._activeGroup ||
+      this._activeDeviceKey ||
       this._areaManagerOpen ||
       this._colorManagerOpen
     ) {
@@ -1047,6 +1049,11 @@ class HaIotFloorplan extends HTMLElement {
                 }
               "
               data-pin-key="${
+                this._escapeHtml(
+                  key
+                )
+              }"
+              data-device-detail="${
                 this._escapeHtml(
                   key
                 )
@@ -3820,6 +3827,220 @@ class HaIotFloorplan extends HTMLElement {
 
 
           /*
+           * DEVICE DETAILS
+           */
+
+          .device-detail-trigger {
+            cursor:pointer;
+          }
+
+
+          .device-detail-trigger:hover {
+            filter:brightness(1.10);
+          }
+
+
+          .device-detail-backdrop {
+            z-index:10001;
+          }
+
+
+          .device-detail-modal {
+            width:min(780px,94vw);
+          }
+
+
+          .detail-hero {
+            display:grid;
+            grid-template-columns:46px 1fr auto;
+            gap:12px;
+            align-items:center;
+            padding:16px;
+            border-bottom:1px solid var(--divider-color);
+          }
+
+
+          .detail-icon {
+            width:42px;
+            height:42px;
+            border-radius:50%;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            background:rgba(0,168,255,.12);
+            border:1px solid rgba(0,168,255,.28);
+          }
+
+
+          .detail-icon ha-icon {
+            --mdc-icon-size:24px;
+          }
+
+
+          .detail-name {
+            font-size:18px;
+            font-weight:650;
+          }
+
+
+          .detail-subtitle {
+            margin-top:3px;
+            font-size:11px;
+            opacity:.58;
+          }
+
+
+          .detail-status {
+            display:flex;
+            align-items:center;
+            gap:7px;
+            padding:6px 9px;
+            border:1px solid var(--divider-color);
+            border-radius:999px;
+            font-size:11px;
+          }
+
+
+          .detail-status-dot {
+            width:8px;
+            height:8px;
+            border-radius:50%;
+          }
+
+
+          .detail-body {
+            padding:14px 16px 18px;
+          }
+
+
+          .detail-section {
+            margin-top:14px;
+          }
+
+
+          .detail-section:first-child {
+            margin-top:0;
+          }
+
+
+          .detail-section-title {
+            margin-bottom:7px;
+            font-size:11px;
+            font-weight:700;
+            letter-spacing:.05em;
+            text-transform:uppercase;
+            opacity:.58;
+          }
+
+
+          .detail-grid {
+            display:grid;
+            grid-template-columns:minmax(120px,170px) minmax(0,1fr);
+            border:1px solid var(--divider-color);
+            border-radius:9px;
+            overflow:hidden;
+          }
+
+
+          .detail-label,
+          .detail-value {
+            padding:7px 9px;
+            border-bottom:1px solid var(--divider-color);
+            font-size:11px;
+            line-height:1.4;
+          }
+
+
+          .detail-label {
+            background:rgba(255,255,255,.03);
+            opacity:.6;
+          }
+
+
+          .detail-value {
+            overflow-wrap:anywhere;
+          }
+
+
+          .detail-grid > :nth-last-child(-n+2) {
+            border-bottom:0;
+          }
+
+
+          .detail-entities {
+            border:1px solid var(--divider-color);
+            border-radius:9px;
+            overflow:hidden;
+          }
+
+
+          .detail-entities summary {
+            padding:8px 10px;
+            cursor:pointer;
+            font-size:11px;
+            font-weight:600;
+            background:rgba(255,255,255,.03);
+          }
+
+
+          .entity-list {
+            padding:8px 10px;
+            display:flex;
+            flex-direction:column;
+            gap:5px;
+          }
+
+
+          .entity-id {
+            font-family:monospace;
+            font-size:10px;
+            overflow-wrap:anywhere;
+            opacity:.78;
+          }
+
+
+          .merged-source {
+            padding:9px 10px;
+            border-bottom:1px solid var(--divider-color);
+          }
+
+
+          .merged-source:last-child {
+            border-bottom:0;
+          }
+
+
+          .merged-source-name {
+            font-size:11px;
+            font-weight:600;
+          }
+
+
+          .merged-source-detail {
+            margin-top:3px;
+            font-size:10px;
+            opacity:.55;
+            overflow-wrap:anywhere;
+          }
+
+
+          @media (max-width:600px) {
+            .detail-grid {
+              grid-template-columns:110px minmax(0,1fr);
+            }
+
+            .detail-hero {
+              grid-template-columns:40px 1fr;
+            }
+
+            .detail-status {
+              grid-column:1 / -1;
+              justify-self:start;
+            }
+          }
+
+
+          /*
            * AREA ASSIGNMENT
            */
 
@@ -4315,7 +4536,7 @@ class HaIotFloorplan extends HTMLElement {
 
           <div class="footer">
 
-            HA IoT Floorplan v0.5
+            HA IoT Floorplan v0.6
             •
             ${
               this._escapeHtml(
@@ -4342,6 +4563,11 @@ class HaIotFloorplan extends HTMLElement {
 
         ${
           this._renderGroupModal()
+        }
+
+
+        ${
+          this._renderDeviceDetailModal()
         }
 
 
@@ -4675,7 +4901,12 @@ class HaIotFloorplan extends HTMLElement {
 
     return `
       <div
-        class="room-item"
+        class="room-item device-detail-trigger"
+        data-device-detail="${
+          this._escapeHtml(
+            key
+          )
+        }"
         title="${
           this._escapeHtml(
             device.name
@@ -4921,6 +5152,536 @@ class HaIotFloorplan extends HTMLElement {
 
   /*
    * =================================================
+   * DEVICE DETAILS
+   * =================================================
+   */
+
+
+  _openDeviceDetail(
+    key
+  ) {
+
+    const device =
+      this._findDeviceByKey(
+        key
+      );
+
+
+    if (!device) {
+      return;
+    }
+
+
+    this._activeDeviceKey =
+      key;
+
+
+    this._render();
+  }
+
+
+  _closeDeviceDetail() {
+
+    this._activeDeviceKey =
+      null;
+
+
+    this._render();
+  }
+
+
+  _formatDetailTimestamp(
+    timestamp
+  ) {
+
+    if (
+      !Number.isFinite(
+        timestamp
+      )
+    ) {
+      return "Unavailable";
+    }
+
+
+    try {
+
+      return new Intl.DateTimeFormat(
+        undefined,
+        {
+          year:"numeric",
+          month:"2-digit",
+          day:"2-digit",
+          hour:"2-digit",
+          minute:"2-digit"
+        }
+      ).format(
+        new Date(
+          timestamp
+        )
+      );
+
+    } catch {
+
+      return new Date(
+        timestamp
+      ).toLocaleString();
+    }
+  }
+
+
+  _formatDetailAge(
+    timestamp
+  ) {
+
+    if (
+      !Number.isFinite(
+        timestamp
+      )
+    ) {
+      return "";
+    }
+
+
+    const delta =
+      Math.max(
+        0,
+        Date.now() -
+        timestamp
+      );
+
+
+    const minutes =
+      Math.floor(
+        delta / 60000
+      );
+
+
+    if (minutes < 60) {
+      return `${minutes} min ago`;
+    }
+
+
+    const hours =
+      Math.floor(
+        minutes / 60
+      );
+
+
+    if (hours < 24) {
+      return `${hours} h ago`;
+    }
+
+
+    const days =
+      Math.floor(
+        hours / 24
+      );
+
+
+    if (days < 60) {
+      return `${days} d ago`;
+    }
+
+
+    const months =
+      Math.floor(
+        days / 30.44
+      );
+
+
+    if (months < 24) {
+      return `${months} mo ago`;
+    }
+
+
+    const years =
+      Math.floor(
+        days / 365.25
+      );
+
+
+    return `${years} y ago`;
+  }
+
+
+  _detailRow(
+    label,
+    value
+  ) {
+
+    const display =
+      value === null ||
+      value === undefined ||
+      value === ""
+        ? "—"
+        : value;
+
+
+    return `
+      <div class="detail-label">
+        ${this._escapeHtml(label)}
+      </div>
+
+      <div class="detail-value">
+        ${this._escapeHtml(String(display))}
+      </div>
+    `;
+  }
+
+
+  _renderDeviceDetailModal() {
+
+    if (
+      !this._activeDeviceKey
+    ) {
+      return "";
+    }
+
+
+    const device =
+      this._findDeviceByKey(
+        this._activeDeviceKey
+      );
+
+
+    if (!device) {
+      return "";
+    }
+
+
+    const category =
+      this._core
+        .getResolvedCategory(
+          device
+        );
+
+
+    const icon =
+      this._core
+        .categoryIcon(
+          category
+        );
+
+
+    const categoryTitle =
+      this._core
+        .categoryTitle(
+          category
+        );
+
+
+    const storedClass =
+      this._core
+        .getStoredClassification(
+          device
+        );
+
+
+    const effectiveClass =
+      this._core
+        .getEffectiveClassification(
+          device
+        );
+
+
+    const classText =
+      storedClass === "auto"
+        ? `Auto (${effectiveClass})`
+        : storedClass;
+
+
+    const storedCategory =
+      this._core
+        .getStoredCategory(
+          device
+        );
+
+
+    const categoryText =
+      storedCategory === "auto"
+        ? `Auto (${categoryTitle})`
+        : categoryTitle;
+
+
+    const lastSeenText =
+      this._formatDetailTimestamp(
+        device.lastSeenTs
+      );
+
+
+    const lastSeenAge =
+      this._formatDetailAge(
+        device.lastSeenTs
+      );
+
+
+    const offlineText =
+      this._formatDetailTimestamp(
+        device.offlineSinceTs
+      );
+
+
+    const offlineAge =
+      this._formatDetailAge(
+        device.offlineSinceTs
+      );
+
+
+    const sourceText =
+      device.lastSeenSource
+        ?.startsWith(
+          "reported:"
+        )
+          ? "Device reported"
+          : (
+              device.lastSeenSource
+                ? "HA state activity"
+                : "Unavailable"
+            );
+
+
+    const entityIds =
+      Array.isArray(
+        device.entityIds
+      )
+        ? device.entityIds
+        : [];
+
+
+    const mergedItems =
+      Array.isArray(
+        device.mergedItems
+      )
+        ? device.mergedItems
+        : [];
+
+
+    const categoryEnabled =
+      this._state
+        .colors
+        .categoryEnabled;
+
+
+    const categoryColor =
+      this._categoryColor(
+        category
+      );
+
+
+    return `
+      <div
+        class="modal-backdrop device-detail-backdrop"
+        id="device-detail-backdrop"
+      >
+
+        <div class="modal device-detail-modal">
+
+          <div class="modal-header">
+
+            <div class="modal-title">
+              <ha-icon icon="mdi:information-outline"></ha-icon>
+              Device details
+            </div>
+
+            <button
+              id="close-device-detail"
+              class="modal-close"
+              title="Close"
+            >
+              ×
+            </button>
+
+          </div>
+
+
+          <div class="detail-hero">
+
+            <div class="detail-icon">
+              <ha-icon
+                icon="${this._escapeHtml(icon)}"
+                ${
+                  categoryEnabled
+                    ? `style="color:${categoryColor}"`
+                    : ""
+                }
+              ></ha-icon>
+            </div>
+
+            <div>
+              <div class="detail-name">
+                ${this._escapeHtml(device.name)}
+              </div>
+
+              <div class="detail-subtitle">
+                ${this._escapeHtml(categoryTitle)}
+                ${
+                  device.areaName
+                    ? ` • ${this._escapeHtml(device.areaName)}`
+                    : ""
+                }
+              </div>
+            </div>
+
+            <div class="detail-status">
+              <span
+                class="detail-status-dot ${
+                  device.online
+                    ? "online"
+                    : "offline"
+                }"
+              ></span>
+              ${device.online ? "Online" : "Offline"}
+            </div>
+
+          </div>
+
+
+          <div class="detail-body">
+
+            <div class="detail-section">
+              <div class="detail-section-title">Device</div>
+              <div class="detail-grid">
+                ${this._detailRow("Friendly name", device.name)}
+                ${this._detailRow("Original name", device.originalName)}
+                ${this._detailRow("Area", device.areaName || "Unassigned")}
+                ${this._detailRow("Category", categoryText)}
+                ${this._detailRow("Classification", classText)}
+                ${this._detailRow("Manufacturer", device.manufacturer)}
+                ${this._detailRow("Model", device.model)}
+                ${this._detailRow("Software version", device.swVersion)}
+              </div>
+            </div>
+
+
+            <div class="detail-section">
+              <div class="detail-section-title">Network</div>
+              <div class="detail-grid">
+                ${this._detailRow("IP address", device.ip)}
+                ${this._detailRow("MAC address", device.mac)}
+                ${this._detailRow("Hostname", device.hostname)}
+                ${this._detailRow("Platforms", (device.platforms || []).join(", "))}
+              </div>
+            </div>
+
+
+            <div class="detail-section">
+              <div class="detail-section-title">Activity</div>
+              <div class="detail-grid">
+                ${this._detailRow("Status", device.online ? "Online" : "Offline")}
+                ${this._detailRow(
+                  "Last seen",
+                  Number.isFinite(device.lastSeenTs)
+                    ? `${lastSeenText}${lastSeenAge ? ` (${lastSeenAge})` : ""}`
+                    : "Unavailable"
+                )}
+                ${this._detailRow(
+                  "Offline since",
+                  Number.isFinite(device.offlineSinceTs)
+                    ? `${offlineText}${offlineAge ? ` (${offlineAge})` : ""}`
+                    : "Unavailable"
+                )}
+                ${this._detailRow("Timestamp source", sourceText)}
+              </div>
+            </div>
+
+
+            <div class="detail-section">
+              <div class="detail-section-title">Home Assistant</div>
+              <div class="detail-grid">
+                ${this._detailRow("Source type", device.sourceType)}
+                ${this._detailRow("Device registry ID", device.registryDeviceId)}
+                ${this._detailRow("Entity registry ID", device.registryEntityId)}
+                ${this._detailRow("Entity count", device.entityCount)}
+                ${this._detailRow("Tracker count", device.trackerCount)}
+              </div>
+            </div>
+
+
+            ${
+              entityIds.length
+                ? `
+                  <div class="detail-section">
+                    <div class="detail-section-title">Entities</div>
+                    <details
+                      class="detail-entities"
+                      ${entityIds.length <= 4 ? "open" : ""}
+                    >
+                      <summary>
+                        ${entityIds.length}
+                        entit${entityIds.length === 1 ? "y" : "ies"}
+                      </summary>
+                      <div class="entity-list">
+                        ${
+                          entityIds
+                            .map(
+                              entityId => `
+                                <div class="entity-id">
+                                  ${this._escapeHtml(entityId)}
+                                </div>
+                              `
+                            )
+                            .join("")
+                        }
+                      </div>
+                    </details>
+                  </div>
+                `
+                : ""
+            }
+
+
+            ${
+              mergedItems.length > 1
+                ? `
+                  <div class="detail-section">
+                    <div class="detail-section-title">Merged sources</div>
+                    <div class="detail-entities">
+                      ${
+                        mergedItems
+                          .map(
+                            source => `
+                              <div class="merged-source">
+                                <div class="merged-source-name">
+                                  ${this._escapeHtml(source.name || source.id || "Source")}
+                                </div>
+                                <div class="merged-source-detail">
+                                  ${this._escapeHtml(
+                                    [
+                                      source.sourceType,
+                                      (source.platforms || []).join(", "),
+                                      source.registryDeviceId
+                                        ? `device:${source.registryDeviceId}`
+                                        : null,
+                                      source.registryEntityId
+                                        ? `entity:${source.registryEntityId}`
+                                        : null
+                                    ]
+                                      .filter(Boolean)
+                                      .join(" • ")
+                                  )}
+                                </div>
+                              </div>
+                            `
+                          )
+                          .join("")
+                      }
+                    </div>
+                  </div>
+                `
+                : ""
+            }
+
+          </div>
+
+        </div>
+
+      </div>
+    `;
+  }
+
+
+  /*
+   * =================================================
    * GROUP MODAL
    * =================================================
    */
@@ -5084,7 +5845,14 @@ class HaIotFloorplan extends HTMLElement {
 
                   return `
 
-                    <div class="modal-device">
+                    <div
+                      class="modal-device device-detail-trigger"
+                      data-device-detail="${
+                        this._escapeHtml(
+                          key
+                        )
+                      }"
+                    >
 
                       <ha-icon
                         icon="${
@@ -5217,8 +5985,21 @@ class HaIotFloorplan extends HTMLElement {
         .categoryEnabled;
 
 
+    const key =
+      this._deviceKey(
+        device
+      );
+
+
     return `
-      <div class="floating-device">
+      <div
+        class="floating-device device-detail-trigger"
+        data-device-detail="${
+          this._escapeHtml(
+            key
+          )
+        }"
+      >
 
         <ha-icon
           icon="${
@@ -5676,6 +6457,81 @@ class HaIotFloorplan extends HTMLElement {
       "click",
       () =>
         this._closeGroup()
+    );
+
+
+    /*
+     * DEVICE DETAILS
+     */
+
+    for (
+      const trigger
+      of this.querySelectorAll(
+        "[data-device-detail]"
+      )
+    ) {
+
+      trigger.addEventListener(
+        "click",
+        event => {
+
+          if (
+            event.target.closest(
+              "[data-pin-single], [data-pin-group], [data-unpin-key]"
+            )
+          ) {
+            return;
+          }
+
+
+          if (
+            this._editMode &&
+            trigger.classList.contains(
+              "device-pin"
+            )
+          ) {
+            return;
+          }
+
+
+          event.stopPropagation();
+
+
+          this._openDeviceDetail(
+            trigger.dataset
+              .deviceDetail
+          );
+        }
+      );
+    }
+
+
+    this.querySelector(
+      "#close-device-detail"
+    )?.addEventListener(
+      "click",
+      event => {
+
+        event.stopPropagation();
+
+        this._closeDeviceDetail();
+      }
+    );
+
+
+    this.querySelector(
+      "#device-detail-backdrop"
+    )?.addEventListener(
+      "click",
+      event => {
+
+        if (
+          event.target ===
+          event.currentTarget
+        ) {
+          this._closeDeviceDetail();
+        }
+      }
     );
 
 
@@ -6398,7 +7254,7 @@ if (
 
 
 console.info(
-  "%c HA IoT Floorplan %c v0.5 ",
+  "%c HA IoT Floorplan %c v0.6 ",
   "background:#00a8ff;color:white;font-weight:bold;",
   "background:#333;color:white;"
 );
