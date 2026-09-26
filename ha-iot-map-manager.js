@@ -494,6 +494,28 @@ class HaIotMapManager extends HTMLElement {
 
     if (
       this._sortMode ===
+      "ip"
+    ) {
+      result.sort(
+        (
+          a,
+          b
+        ) =>
+          this._compareIpAddresses(
+            a.ip,
+            b.ip
+          ) ||
+          nameSort(
+            a,
+            b
+          )
+      );
+
+      return result;
+    }
+
+    if (
+      this._sortMode ===
       "last_seen"
     ) {
       result.sort(
@@ -592,6 +614,340 @@ class HaIotMapManager extends HTMLElement {
     );
 
     return result;
+  }
+
+
+  _compareIpAddresses(
+    a,
+    b
+  ) {
+    const parse =
+      value => {
+        const text =
+          String(
+            value ||
+            ""
+          )
+            .trim()
+            .split(/[\s,;]+/)[0];
+
+        if (!text) {
+          return {
+            valid: false,
+            value: 0,
+            text: ""
+          };
+        }
+
+        const parts =
+          text.split(".");
+
+        if (
+          parts.length === 4 &&
+          parts.every(
+            part =>
+              /^\d+$/.test(part) &&
+              Number(part) >= 0 &&
+              Number(part) <= 255
+          )
+        ) {
+          const numeric =
+            parts.reduce(
+              (
+                total,
+                part
+              ) =>
+                total * 256 +
+                Number(part),
+              0
+            );
+
+          return {
+            valid: true,
+            value: numeric,
+            text
+          };
+        }
+
+        return {
+          valid: false,
+          value: 0,
+          text
+        };
+      };
+
+    const ai = parse(a);
+    const bi = parse(b);
+
+    if (
+      ai.valid !==
+      bi.valid
+    ) {
+      return ai.valid
+        ? -1
+        : 1;
+    }
+
+    if (
+      ai.valid &&
+      bi.valid
+    ) {
+      return ai.value -
+        bi.value;
+    }
+
+    if (
+      ai.text &&
+      !bi.text
+    ) {
+      return -1;
+    }
+
+    if (
+      !ai.text &&
+      bi.text
+    ) {
+      return 1;
+    }
+
+    return ai.text.localeCompare(
+      bi.text
+    );
+  }
+
+
+  _csvValue(
+    value
+  ) {
+    const text =
+      String(
+        value ?? ""
+      );
+
+    return `"${text.replaceAll(
+      '"',
+      '""'
+    )}"`;
+  }
+
+
+  _csvTimestamp(
+    timestamp
+  ) {
+    if (
+      !Number.isFinite(
+        timestamp
+      )
+    ) {
+      return "";
+    }
+
+    try {
+      return new Date(
+        timestamp
+      ).toISOString();
+    } catch {
+      return "";
+    }
+  }
+
+
+  _exportCsv() {
+    const snapshot =
+      this._core.getSnapshot();
+
+    const areaNames =
+      new Map(
+        this._core.areas.map(
+          area => [
+            area.area_id,
+            area.name
+          ]
+        )
+      );
+
+    const devices =
+      [...snapshot.inventory]
+        .sort(
+          (
+            a,
+            b
+          ) =>
+            this._compareIpAddresses(
+              a.ip,
+              b.ip
+            ) ||
+            String(
+              a.name ||
+              ""
+            ).localeCompare(
+              String(
+                b.name ||
+                ""
+              )
+            )
+        );
+
+    const headers = [
+      "Name",
+      "IP",
+      "MAC",
+      "Hostname",
+      "Area",
+      "Category",
+      "Classification",
+      "Online",
+      "Last seen",
+      "Offline since",
+      "Timestamp source",
+      "Manufacturer",
+      "Model",
+      "Software version",
+      "Platforms",
+      "Entity count",
+      "Tracker count",
+      "Entity IDs"
+    ];
+
+    const rows =
+      devices.map(
+        device => {
+          const category =
+            this._core.getResolvedCategory(
+              device
+            );
+
+          const classification =
+            this._core.getEffectiveClassification(
+              device
+            );
+
+          const source =
+            device.lastSeenSource?.startsWith(
+              "reported:"
+            )
+              ? "device reported"
+              : (
+                  device.lastSeenSource
+                    ? "HA state activity"
+                    : ""
+                );
+
+          const platforms =
+            Array.isArray(
+              device.platforms
+            )
+              ? device.platforms.join(" | ")
+              : (
+                  device.platforms ||
+                  device.platform ||
+                  ""
+                );
+
+          const entityIds =
+            Array.isArray(
+              device.entityIds
+            )
+              ? device.entityIds.join(" | ")
+              : "";
+
+          return [
+            device.name,
+            device.ip,
+            device.mac,
+            device.hostname,
+            device.areaName ||
+              areaNames.get(
+                device.areaId
+              ) ||
+              "",
+            this._core.categoryTitle(
+              category
+            ),
+            classification,
+            device.online
+              ? "Yes"
+              : "No",
+            this._csvTimestamp(
+              device.lastSeenTs
+            ),
+            this._csvTimestamp(
+              device.offlineSinceTs
+            ),
+            source,
+            device.manufacturer,
+            device.model,
+            device.swVersion,
+            platforms,
+            device.entityCount,
+            device.trackerCount,
+            entityIds
+          ];
+        }
+      );
+
+    const csv =
+      "\ufeff" +
+      [
+        headers,
+        ...rows
+      ]
+        .map(
+          row =>
+            row
+              .map(
+                value =>
+                  this._csvValue(
+                    value
+                  )
+              )
+              .join(",")
+        )
+        .join("\r\n");
+
+    const blob =
+      new Blob(
+        [csv],
+        {
+          type:
+            "text/csv;charset=utf-8"
+        }
+      );
+
+    const url =
+      URL.createObjectURL(
+        blob
+      );
+
+    const today =
+      new Date()
+        .toLocaleDateString(
+          "en-CA"
+        );
+
+    const link =
+      document.createElement(
+        "a"
+      );
+
+    link.href = url;
+    link.download =
+      `ha-iot-inventory-${today}.csv`;
+
+    document.body.appendChild(
+      link
+    );
+
+    link.click();
+    link.remove();
+
+    setTimeout(
+      () =>
+        URL.revokeObjectURL(
+          url
+        ),
+      1000
+    );
   }
 
 
@@ -786,6 +1142,72 @@ class HaIotMapManager extends HTMLElement {
             margin-left:auto;
             font-size:11px;
             opacity:.55;
+          }
+
+
+          .export-button {
+            padding:7px 11px;
+            white-space:nowrap;
+          }
+
+
+          .area-group,
+          .group-section {
+            margin-top:10px;
+            border:1px solid var(--divider-color);
+            border-radius:9px;
+            overflow:hidden;
+            background:rgba(255,255,255,.015);
+          }
+
+
+          .area-group > summary,
+          .group-section > summary {
+            padding:10px 12px;
+            list-style:none;
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:10px;
+            user-select:none;
+          }
+
+
+          .area-group > summary::-webkit-details-marker,
+          .group-section > summary::-webkit-details-marker {
+            display:none;
+          }
+
+
+          .area-group > summary::before,
+          .group-section > summary::before {
+            content:"▶";
+            font-size:9px;
+            opacity:.55;
+            transition:transform .12s ease;
+          }
+
+
+          .area-group[open] > summary::before,
+          .group-section[open] > summary::before {
+            transform:rotate(90deg);
+          }
+
+
+          .group-summary-title {
+            flex:1;
+          }
+
+
+          .group-summary-count {
+            font-size:10px;
+            opacity:.55;
+          }
+
+
+          .group-device-list {
+            padding:0 8px 4px;
+            border-top:1px solid var(--divider-color);
           }
 
 
@@ -1342,6 +1764,13 @@ class HaIotMapManager extends HTMLElement {
               </option>
 
               <option
+                value="ip"
+                ${this._sortMode === "ip" ? "selected" : ""}
+              >
+                IP address
+              </option>
+
+              <option
                 value="last_seen"
                 ${this._sortMode === "last_seen" ? "selected" : ""}
               >
@@ -1400,6 +1829,15 @@ class HaIotMapManager extends HTMLElement {
                 Offline &gt; 90 days
               </option>
             </select>
+
+
+            <button
+              class="control-button export-button"
+              id="iot-export-csv"
+              title="Export complete IoT inventory as CSV"
+            >
+              Export CSV
+            </button>
 
 
             <div class="shown-count">
@@ -1477,7 +1915,7 @@ class HaIotMapManager extends HTMLElement {
 
 
           ${
-            this._renderSection(
+            this._renderCollapsedSection(
               "Unassigned",
               groups.unassigned
             )
@@ -1485,7 +1923,7 @@ class HaIotMapManager extends HTMLElement {
 
 
           ${
-            this._renderSection(
+            this._renderCollapsedSection(
               "Floating / Mobile",
               groups.floating
             )
@@ -1516,7 +1954,7 @@ class HaIotMapManager extends HTMLElement {
             "
           >
 
-            HA IoT Map Manager v0.10
+            HA IoT Map Manager v0.11
             • Core v0.10
 
           </div>
@@ -1555,6 +1993,15 @@ class HaIotMapManager extends HTMLElement {
 
         this._render();
       }
+    );
+
+
+    this.querySelector(
+      "#iot-export-csv"
+    )?.addEventListener(
+      "click",
+      () =>
+        this._exportCsv()
     );
 
 
@@ -2353,27 +2800,41 @@ class HaIotMapManager extends HTMLElement {
                     ]
                   ) => `
 
-                    <div class="area-title">
+                    <details class="area-group">
 
-                      ${
-                        this._escapeHtml(
-                          area
-                        )
-                      }
+                      <summary>
 
-                    </div>
-
-
-                    ${
-                      devices
-                        .map(
-                          device =>
-                            this._renderDevice(
-                              device
+                        <span class="group-summary-title">
+                          ${
+                            this._escapeHtml(
+                              area
                             )
-                        )
-                        .join("")
-                    }
+                          }
+                        </span>
+
+                        <span class="group-summary-count">
+                          ${devices.length}
+                        </span>
+
+                      </summary>
+
+
+                      <div class="group-device-list">
+
+                        ${
+                          devices
+                            .map(
+                              device =>
+                                this._renderDevice(
+                                  device
+                                )
+                            )
+                            .join("")
+                        }
+
+                      </div>
+
+                    </details>
 
                   `
                 )
@@ -2437,39 +2898,47 @@ class HaIotMapManager extends HTMLElement {
   ) {
 
     return `
-      <div class="special-section">
+      <div class="section">
 
-        <details>
+        <details class="group-section">
 
           <summary>
 
-            ${
-              this._escapeHtml(
-                title
-              )
-            }
+            <span class="group-summary-title">
+              ${
+                this._escapeHtml(
+                  title
+                )
+              }
+            </span>
 
-            (${devices.length})
+            <span class="group-summary-count">
+              ${devices.length}
+            </span>
 
           </summary>
 
 
-          ${
-            devices.length
-              ? devices
-                  .map(
-                    device =>
-                      this._renderDevice(
-                        device
-                      )
-                  )
-                  .join("")
-              : `
-                <div class="empty">
-                  Nothing here.
-                </div>
-              `
-          }
+          <div class="group-device-list">
+
+            ${
+              devices.length
+                ? devices
+                    .map(
+                      device =>
+                        this._renderDevice(
+                          device
+                        )
+                    )
+                    .join("")
+                : `
+                  <div class="empty">
+                    Nothing here.
+                  </div>
+                `
+            }
+
+          </div>
 
         </details>
 
@@ -2644,7 +3113,7 @@ if (
 
 
 console.info(
-  "%c HA IoT Map Manager %c v0.10 ",
+  "%c HA IoT Map Manager %c v0.11 ",
   "background:#03a9f4;color:white;font-weight:bold;",
   "background:#333;color:white;"
 );
